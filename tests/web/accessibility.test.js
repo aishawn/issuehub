@@ -52,6 +52,17 @@ test('muted text meets WCAG AA contrast on the application surfaces', () => {
   }
 });
 
+test('blue primary actions and links meet WCAG AA contrast', () => {
+  const primary = colorToken('--primary');
+  const primaryDark = colorToken('--primary-dark');
+  const accentSoft = colorToken('--accent-soft');
+
+  assert.equal(primary, '#2563eb', 'The primary action color should use the blue product palette');
+  assert.ok(contrast('#ffffff', primary) >= 4.5, 'White button text must remain readable on blue actions');
+  assert.ok(contrast(primaryDark, '#ffffff') >= 4.5, 'Blue links must remain readable on white surfaces');
+  assert.ok(contrast(primaryDark, accentSoft) >= 4.5, 'Selected blue states must retain readable labels');
+});
+
 test('primary touch controls meet the 44px minimum target size', () => {
   for (const selector of ['.segmented button', '.filters select', '.sync-retry']) {
     const minimum = cssRule(selector).match(/min-height:\s*(\d+)px/);

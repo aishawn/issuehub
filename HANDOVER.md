@@ -25,7 +25,7 @@ TeamAI Issue Hub 用于收集团队在 Claude Code、Qwen Code、`teamai-cli` �
 
 - FastAPI + SQLite 后端。
 - Web 快速录入页和问题总览页。
-- 状态筛选按钮初始化暴露 `aria-pressed` 状态；主界面的弱化文字颜色满足 WCAG AA 4.5:1 对比度；主要移动触控控件至少 44px。
+- Web 采用 ChatGPT 风格的暖白/浅灰底色、蓝色主操作和中性灰层级；按钮、链接和弱化文字通过 WCAG AA 对比度检查；主要移动触控控件至少 44px，状态筛选按钮暴露 `aria-pressed` 状态。
 - Web 记录库支持分页加载、过滤、GitLab 状态/外链、重新打开；包含移动布局及空、错误状态反馈。
 - GitLab 有待同步记录时，Web 记录库显示手动重试按钮，并反馈成功、失败及剩余数量。
 - 配置 GitLab 时后台每 60 秒自动重试最多 10 条待同步记录；可用 `SYNC_INTERVAL_SECONDS=0` 关闭。
@@ -211,7 +211,7 @@ GITLAB_PROJECT_ID=
 
 - Python 3.11.15（uv 隔离环境，含完整开发依赖）：43 passed。
 - Python 3.13.5（uv 隔离环境，含完整开发依赖）：43 passed，无警告。
-- Node.js 22：17 个交互用例通过（详情焦点管理 4 个、外链协议校验 2 个、加载更多 3 个、请求错误提示 3 个、无障碍检查 3 个、GitLab 重试 2 个）。
+- Node.js 22：18 个交互用例通过（详情焦点管理 4 个、外链协议校验 2 个、加载更多 3 个、请求错误提示 3 个、无障碍/色彩对比检查 4 个、GitLab 重试 2 个）。
 
 ```powershell
 python -m pytest -q
