@@ -12,6 +12,16 @@
     @media(max-width:460px){.feature-grid{grid-template-columns:1fr}.feature{min-height:unset}.steps{grid-template-columns:1fr}.step{min-height:unset}.visibility{grid-template-columns:1fr}.arrow{justify-self:center;transform:rotate(90deg)}.foot{flex-direction:column}.back{font-size:12px;padding:7px 9px}}
     @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;scroll-behavior:auto!important}}
   </style>
+  <style>
+    .agent-card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:16px;padding:20px;border:1px solid #cfe0ea;border-radius:15px;background:linear-gradient(115deg,#f1f7fb,#fff)}
+    .agent-kicker{margin:0 0 6px;color:#176c9a;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+    .agent-card h3{margin:0;font-size:16px}.agent-card p{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.65}
+    .agent-actions{display:flex;align-items:center;gap:10px}.agent-actions .cta{white-space:nowrap;cursor:pointer;font:inherit;font-size:13px}
+    .agent-details{grid-column:1/-1;padding-top:12px;border-top:1px solid var(--line)}.agent-details summary{color:var(--blue);cursor:pointer;font-size:12px;font-weight:700}
+    .agent-prompt{box-sizing:border-box;width:100%;min-height:270px;margin-top:10px;padding:12px;border:1px solid #263b52;border-radius:10px;background:#132238;color:#e8f0f6;font:12px/1.7 ui-monospace,Consolas,monospace;resize:vertical}
+    .agent-hint{color:#78879a!important;font-size:11px!important}
+    @media(max-width:760px){.agent-card{grid-template-columns:1fr}.agent-actions{align-items:stretch;flex-direction:column}.agent-actions .cta{width:100%}.agent-details{grid-column:auto}}
+  </style>
 </head>
 <body>
 <main class="page">
@@ -62,6 +72,25 @@ python teamai_cli.py notes delete 12</code></pre></div></article>
     </div>
   </section>
 
+  <section aria-labelledby="agent-title">
+    <div class="section-heading"><h2 id="agent-title">也可以让 AI 助手帮你安装</h2><p>一次安装到用户目录，之后每个项目都能复用</p></div>
+    <article class="agent-card">
+      <div><p class="agent-kicker">Claude Code · TeamAI Capture</p><h3>复制安装指令，粘贴到 Claude Code</h3><p>Claude Code 会安装随手记 Skill、合并配置 TeamAI MCP，并告诉你如何触发。服务地址或密钥不明确时，它会先询问，不会猜测。</p><p class="agent-hint">Skill 安装到个人配置中，不需要每个项目重复安装。MCP 连接仍需能访问公司的 TeamAI 服务。</p></div>
+      <div class="agent-actions"><button id="copy-agent-prompt" class="cta" type="button">复制给 Claude Code</button></div>
+      <details class="agent-details"><summary>查看将要复制的完整指令</summary>
+        <textarea id="agent-prompt" class="agent-prompt" readonly aria-label="给 Claude Code 的 TeamAI Skill 安装指令">请帮我安装并配置 TeamAI Issue Hub 的 teamai-capture Skill，完成后告诉我怎么使用。
+
+请按下面步骤操作：
+1. 检查当前机器的 Claude Code 用户级 Skills 和 MCP 配置，保留已有配置，不要覆盖其他 MCP 服务或项目文件。
+2. 从官方仓库 https://github.com/aishawn/issuehub 获取 skills/teamai-capture/SKILL.md，安装到 Claude Code 的用户级 Skill 目录（~/.claude/skills/teamai-capture/SKILL.md）。如果已安装，先比较版本，再更新这一项；不要把安装内容写进当前项目。
+3. 配置 TeamAI MCP。仓库中的 MCP 客户端需要 mcp_server.py 和 teamai_transport.py；优先使用已有本地仓库，否则将仓库放到用户级工具目录，不要放入当前项目。使用 Claude Code 支持的用户级 MCP 配置方式，并合并现有配置。
+4. 询问我 TeamAI 服务的 HTTPS/API 地址；如果服务需要 TEAMAI_API_KEY，再询问并安全配置。不要默认使用 127.0.0.1:8787，除非我确认 TeamAI 服务运行在这台电脑上。不要把密钥写入项目文件、提交到 Git 或在回复中回显。
+5. 确认 Skill 和 MCP 配置路径、说明是否需要重启 Claude Code；如果缺少服务地址或密钥，完成可做的 Skill 安装后明确列出待补信息，不要声称连接已验证。
+6. 告诉我使用方式：可以说“帮我记一下这次部署过程”“搜索之前关于部署的记录”“查看/修改/删除我的随记”，也可以显式调用 teamai-capture Skill。记录随记时按 Skill 询问用户名、项目、工作类型和共享/个人视图；个人视图按用户名弱隔离，不是安全的私人存储。</textarea>
+      </details>
+    </article>
+  </section>
+
   <section aria-labelledby="visibility-title">
     <div class="section-heading"><h2 id="visibility-title">记录放在哪里</h2><p>在保存时选择范围</p></div>
     <article class="use-card">
@@ -78,5 +107,21 @@ python teamai_cli.py notes delete 12</code></pre></div></article>
   <section class="bottom" aria-label="方案说明入口"><div><h2>想了解系统怎么设计？</h2><p>查看入口、服务、数据存储和同步关系图。</p></div><a class="cta" href="/architecture">查看方案说明 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></section>
   <footer class="foot"><span>TeamAI Issue Hub · 使用手册</span><a href="/">返回工作台</a></footer>
 </main>
+<script>
+  const copyButton = document.querySelector('#copy-agent-prompt');
+  const agentPrompt = document.querySelector('#agent-prompt');
+  copyButton.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(agentPrompt.value);
+    } catch {
+      agentPrompt.focus();
+      agentPrompt.select();
+      document.execCommand('copy');
+    }
+    const previous = copyButton.textContent;
+    copyButton.textContent = '已复制，粘贴给 Claude Code';
+    window.setTimeout(() => { copyButton.textContent = previous; }, 2600);
+  });
+</script>
 </body>
 </html>
