@@ -28,6 +28,7 @@ def main() -> None:
         if name == "note":
             command.add_argument("--username", default=os.getenv("TEAMAI_USER", ""))
             command.add_argument("--visibility", choices=("shared", "private"), default="shared")
+        command.add_argument("--work-type", choices=("算法调研", "算法预研", "模型部署", "组件开发", "项目支撑", "工作日常"), default="项目支撑")
         command.add_argument("--tech", action="append", default=[])
         if name == "issue":
             command.add_argument("--environment", default="")
@@ -41,11 +42,36 @@ def main() -> None:
     capture.add_argument("--project", default="")
     capture.add_argument("--username", default=os.getenv("TEAMAI_USER", ""))
     capture.add_argument("--visibility", choices=("shared", "private"), default="shared")
+    capture.add_argument("--work-type", choices=("算法调研", "算法预研", "模型部署", "组件开发", "项目支撑", "工作日常"), default="项目支撑")
     capture.add_argument("--tech", action="append", default=[])
     capture.add_argument("--environment", default="")
     capture.add_argument("--reproduction", default="")
     search = sub.add_parser("search")
     search.add_argument("query")
+    search.add_argument("--username", default=os.getenv("TEAMAI_USER", ""))
+    notes = sub.add_parser("notes", help="List, read, update, or delete notes")
+    notes.add_argument("--username", default=os.getenv("TEAMAI_USER", ""))
+    notes_sub = notes.add_subparsers(dest="notes_command", required=True)
+    notes_list = notes_sub.add_parser("list", help="List notes visible to this username")
+    notes_list.add_argument("--query", default="")
+    notes_list.add_argument("--project")
+    notes_list.add_argument("--work-type")
+    notes_list.add_argument("--visibility", choices=("shared", "private"))
+    notes_list.add_argument("--username", default=argparse.SUPPRESS)
+    notes_get = notes_sub.add_parser("get", help="Read a note by ID")
+    notes_get.add_argument("id", type=int)
+    notes_get.add_argument("--username", default=argparse.SUPPRESS)
+    notes_update = notes_sub.add_parser("update", help="Update a note you own")
+    notes_update.add_argument("id", type=int)
+    notes_update.add_argument("--title")
+    notes_update.add_argument("--content")
+    notes_update.add_argument("--project")
+    notes_update.add_argument("--work-type", choices=("算法调研", "算法预研", "模型部署", "组件开发", "项目支撑", "工作日常"))
+    notes_update.add_argument("--visibility", choices=("shared", "private"))
+    notes_update.add_argument("--username", default=argparse.SUPPRESS)
+    notes_delete = notes_sub.add_parser("delete", help="Delete a note you own")
+    notes_delete.add_argument("id", type=int)
+    notes_delete.add_argument("--username", default=argparse.SUPPRESS)
     resolve = sub.add_parser("resolve")
     resolve.add_argument("id", type=int)
     resolve.add_argument("--solution", required=True)
@@ -61,11 +87,13 @@ def main() -> None:
     publish.add_argument("--reviewer", required=True, help="Reviewer audit label (not authenticated in shared-key mode)")
     args = parser.parse_args()
 
+    if args.command in ("note", "notes", "search") and not getattr(args, "username", "").strip():
+        raise SystemExit("note commands require --username or TEAMAI_USER")
     if args.command in ("note", "issue"):
         path = "/v1/notes" if args.command == "note" else "/v1/issues"
-        payload = {"content": args.content, "title": args.title, "source": args.source, "tags": args.tag, "project": args.project, "tech_stack": args.tech}
+        payload = {"content": args.content, "title": args.title, "source": args.source, "tags": args.tag, "project": args.project, "work_type": args.work_type, "tech_stack": args.tech}
         if args.command == "note":
-            payload["visibility"] = args.visibility
+            payload.update(visibility=args.visibility, work_type=args.work_type)
         if args.command == "issue":
             payload.update(environment=args.environment, reproduction=args.reproduction)
         result = request("POST", path, payload, username=args.username if args.command == "note" else None)
@@ -76,12 +104,38 @@ def main() -> None:
         kind = args.type
         if kind == "auto":
             kind = request("POST", "/v1/classify", {"content": content})["kind"]
+        if kind == "note" and not args.username.strip():
+            raise SystemExit("note capture requires --username or TEAMAI_USER")
         path = {"note": "/v1/notes", "issue": "/v1/issues", "solution": "/v1/solutions"}[kind]
-        payload = {"content": content, "title": args.title, "source": args.source, "tags": args.tag, "project": args.project, "tech_stack": args.tech, "environment": args.environment, "reproduction": args.reproduction}
+        payload = {"content": content, "title": args.title, "source": args.source, "tags": args.tag, "project": args.project, "work_type": args.work_type, "tech_stack": args.tech, "environment": args.environment, "reproduction": args.reproduction}
         if kind == "note": payload["visibility"] = args.visibility
         result = request("POST", path, payload, username=args.username if kind == "note" else None)
     elif args.command == "search":
-        result = request("GET", f"/v1/search?q={urllib.parse.quote(args.query)}")
+        result = request("GET", f"/v1/search?q={urllib.parse.quote(args.query)}", username=args.username)
+    elif args.command == "notes":
+        if args.notes_command == "list":
+            params = {"kind": "note", "q": args.query}
+            if args.project: params["project"] = args.project
+            if args.work_type: params["work_type"] = args.work_type
+            if args.visibility: params["visibility"] = args.visibility
+            result = request("GET", "/v1/search?" + urllib.parse.urlencode(params), username=args.username)
+        elif args.notes_command == "get":
+            result = request("GET", f"/v1/notes/{args.id}", username=args.username)
+        elif args.notes_command == "update":
+            existing = request("GET", f"/v1/notes/{args.id}", username=args.username)
+            payload = {
+                "expected_updated_at": existing["updated_at"],
+                "title": args.title if args.title is not None else existing["title"],
+                "content": args.content if args.content is not None else existing["content"],
+                "project": args.project if args.project is not None else existing["project"],
+                "work_type": args.work_type if args.work_type is not None else existing["work_type"],
+                "visibility": args.visibility if args.visibility is not None else existing["visibility"],
+                "tags": [tag for tag in existing["tags"] if not tag.startswith(("source::", "type::"))],
+                "tech_stack": existing["tech_stack"],
+            }
+            result = request("PUT", f"/v1/records/{args.id}", payload, username=args.username)
+        else:
+            result = request("DELETE", f"/v1/notes/{args.id}", username=args.username)
     elif args.command == "resolve":
         result = request("POST", f"/v1/issues/{args.id}/resolve", {"solution": args.solution, "verification": args.verification, "source": args.source})
     elif args.knowledge_command == "candidates":

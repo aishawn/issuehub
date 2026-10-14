@@ -478,6 +478,12 @@ def require_record_visible(row, username: str) -> None:
         raise HTTPException(status_code=404, detail="Record not found")
 
 
+def require_note_owner(row, username: str) -> None:
+    require_record_visible(row, username)
+    if row["kind"] != "note" or not username or row["owner_username"] != username:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
     supplied_id = request.headers.get("x-request-id", "")
@@ -773,7 +779,7 @@ def sync_record(record_id: int) -> str:
 
 @app.post("/v1/notes")
 def create_note(record: RecordIn, request: Request) -> dict[str, Any]:
-    return create_record(record, "note", current_username(request))
+    return create_record(record, "note", current_username(request, required=True))
 
 
 @app.post("/v1/issues")
@@ -910,9 +916,20 @@ def get_issue(record_id: int, request: Request) -> dict[str, Any]:
     return response(row) | {"events": [dict(event) for event in events], "attachments": [dict(item) for item in attachments]}
 
 
+@app.get("/v1/notes/{record_id}")
+def get_note(record_id: int, request: Request) -> dict[str, Any]:
+    username = current_username(request, required=True)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM records WHERE id = ? AND kind = 'note'", (record_id,)).fetchone()
+        events = conn.execute("SELECT id, event_type, actor, summary, created_at FROM record_events WHERE record_id = ? ORDER BY created_at DESC, id DESC LIMIT 100", (record_id,)).fetchall() if row else []
+        attachments = conn.execute("SELECT id, file_name, content_type, size_bytes, sha256, created_at FROM record_attachments WHERE record_id = ? ORDER BY id", (record_id,)).fetchall() if row else []
+    require_record_visible(row, username)
+    return response(row) | {"events": [dict(event) for event in events], "attachments": [dict(item) for item in attachments]}
+
+
 @app.post("/v1/records/{record_id}/attachments")
 async def upload_attachment(record_id: int, request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
-    username = current_username(request)
+    username = current_username(request, required=True)
     filename = unicodedata.normalize("NFC", Path(file.filename or "attachment").name).strip()
     if not filename or len(filename) > 240 or filename in {".", ".."}:
         raise HTTPException(status_code=422, detail="Invalid attachment filename")
@@ -927,7 +944,10 @@ async def upload_attachment(record_id: int, request: Request, file: UploadFile =
         raise HTTPException(status_code=413, detail=f"Attachment exceeds {ATTACHMENT_MAX_BYTES} bytes")
     with db() as conn:
         record = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
-    require_record_visible(record, username)
+    if record and record["kind"] == "note":
+        require_note_owner(record, username)
+    else:
+        require_record_visible(record, username)
     content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     if extension in {".html", ".htm"}:
         content_type = "text/html"
@@ -942,7 +962,10 @@ async def upload_attachment(record_id: int, request: Request, file: UploadFile =
     try:
         with db() as conn:
             current_record = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
-            require_record_visible(current_record, username)
+            if current_record and current_record["kind"] == "note":
+                require_note_owner(current_record, username)
+            else:
+                require_record_visible(current_record, username)
             if conn.execute("SELECT COUNT(*) AS count FROM record_attachments WHERE record_id = ?", (record_id,)).fetchone()["count"] >= 30:
                 raise HTTPException(status_code=409, detail="A record can have at most 30 attachments")
             cursor = conn.execute("INSERT INTO record_attachments (record_id, object_key, file_name, content_type, size_bytes, sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (record_id, object_key, filename, content_type, len(payload), digest, now()))
@@ -1000,7 +1023,10 @@ def edit_record(record_id: int, payload: RecordUpdateIn, request: Request) -> di
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = lock_record(conn, record_id)
-            require_record_visible(row, username)
+            if row and row["kind"] == "note":
+                require_note_owner(row, username)
+            else:
+                require_record_visible(row, username)
             if row["updated_at"] != payload.expected_updated_at:
                 raise HTTPException(status_code=409, detail="Record changed since it was opened. Refresh and try again.")
             if row["kind"] == "knowledge":
@@ -1039,6 +1065,26 @@ def edit_record(record_id: int, payload: RecordUpdateIn, request: Request) -> di
         with db() as conn:
             updated = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
     return response(updated)
+
+
+@app.delete("/v1/notes/{record_id}")
+def delete_note(record_id: int, request: Request) -> dict[str, Any]:
+    username = current_username(request, required=True)
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = lock_record(conn, record_id)
+        require_note_owner(row, username)
+        attachments = conn.execute("SELECT object_key FROM record_attachments WHERE record_id = ?", (record_id,)).fetchall()
+        conn.execute("DELETE FROM record_events WHERE record_id = ?", (record_id,))
+        conn.execute("DELETE FROM records WHERE id = ?", (record_id,))
+    if attachments:
+        try:
+            store = object_store()
+            for attachment in attachments:
+                store.remove_object(ATTACHMENT_BUCKET, attachment["object_key"])
+        except Exception as exc:
+            logger.error("Deleted note attachment cleanup failed record_id=%s error=%s", record_id, type(exc).__name__)
+    return {"deleted": True, "id": record_id}
 
 
 def update_issue(record_id: int, payload: SolutionIn, status: str) -> dict[str, Any]:

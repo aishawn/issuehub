@@ -32,7 +32,7 @@ def client(tmp_path, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     import app.main as main
     importlib.reload(main)
-    return TestClient(main.app)
+    return TestClient(main.app, headers={"X-TeamAI-User": "test-user"})
 
 
 def test_issue_lifecycle_and_overview(tmp_path, monkeypatch):
@@ -197,6 +197,23 @@ def test_private_notes_are_not_queued_for_gitlab(tmp_path, monkeypatch):
         }).json()
         assert result["sync_error"] is None
         assert calls == []
+
+
+def test_note_crud_requires_username_and_enforces_owner(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        alice = {"X-TeamAI-User": "Alice"}
+        bob = {"X-TeamAI-User": "Bob"}
+        assert api.post("/v1/notes", headers={"X-TeamAI-User": ""}, json={"content": "anonymous"}).status_code == 400
+        note = api.post("/v1/notes", headers=alice, json={"title": "Before", "content": "Alice note", "visibility": "shared"}).json()
+        assert api.get(f"/v1/notes/{note['id']}", headers=alice).status_code == 200
+        assert api.get(f"/v1/notes/{note['id']}", headers=bob).status_code == 200
+        payload = {"expected_updated_at": note["updated_at"], "title": "After", "content": "Alice note", "project": "", "work_type": "项目支撑"}
+        assert api.put(f"/v1/records/{note['id']}", headers=bob, json=payload).status_code == 404
+        assert api.put(f"/v1/records/{note['id']}", headers=alice, json=payload).status_code == 200
+        assert api.delete(f"/v1/notes/{note['id']}", headers=bob).status_code == 404
+        assert api.get(f"/v1/notes/{note['id']}", headers=alice).status_code == 200
+        assert api.delete(f"/v1/notes/{note['id']}", headers=alice).json() == {"deleted": True, "id": note["id"]}
+        assert api.get(f"/v1/notes/{note['id']}", headers=alice).status_code == 404
 
 
 def test_redacts_credentials_and_deduplicates(tmp_path, monkeypatch):

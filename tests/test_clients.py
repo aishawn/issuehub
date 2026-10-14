@@ -263,6 +263,7 @@ def test_cli_and_mcp_create_records_through_authenticated_api(tmp_path, monkeypa
     child_env = os.environ.copy()
     child_env["TEAMAI_API"] = api_url
     child_env["TEAMAI_API_KEY"] = "integration-test-key-0123456789"
+    child_env["TEAMAI_USER"] = "integration-cli"
     try:
         deadline = time.monotonic() + 5
         while not server.started and server_thread.is_alive() and time.monotonic() < deadline:

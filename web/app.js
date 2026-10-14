@@ -313,9 +313,12 @@ async function openDetail(id) {
     attachmentList.innerHTML = (record.attachments || []).map((file) => `<li><a href="/v1/records/${Number(record.id)}/attachments/${Number(file.id)}" data-attachment-url="/v1/records/${Number(record.id)}/attachments/${Number(file.id)}" data-filename="${esc(file.file_name)}">${esc(file.file_name)}</a><span>${(Number(file.size_bytes) / 1024 / 1024).toFixed(2)} MB</span></li>`).join('') || '<li class="activity-empty">暂无附件</li>';
     const events = record.events || [{ event_type: 'created', summary: '记录已创建', created_at: record.created_at, actor: record.author_id || '' }];
     $('#activity-list').innerHTML = events.length ? events.map((event) => `<li class="activity-item"><span class="activity-dot"></span><div><b>${esc(event.summary)}</b><small>${event.actor ? `${esc(event.actor)} · ` : ''}${new Date(event.created_at).toLocaleString('zh-CN')}</small></div></li>`).join('') : '<li class="activity-empty">暂无活动记录</li>';
+    const ownsNote = record.kind === 'note' && Boolean(currentUser()) && record.owner_username === currentUser().trim().toLocaleLowerCase();
+    $('#delete-note').hidden = !ownsNote;
+    $('.attachment-upload').classList.toggle('hidden', record.kind === 'note' && !ownsNote);
     $('#record-editor').classList.add('hidden');
     $('#detail-content').classList.remove('hidden');
-    $('#edit-record').hidden = record.kind === 'issue' && record.status === 'resolved';
+    $('#edit-record').hidden = (record.kind === 'note' && !ownsNote) || (record.kind === 'issue' && record.status === 'resolved');
     $('#edit-title').value = record.title;
     $('#edit-content').value = record.content;
     $('#edit-project').value = record.project || '';
@@ -451,6 +454,18 @@ $('#attachment-input').addEventListener('change', async (event) => {
     message('附件已添加。'); await openDetail(state.selected.id);
   } catch (error) { message(`附件上传失败：${error.message}`, true); }
   finally { event.target.value = ''; }
+});
+$('#delete-note').addEventListener('click', async () => {
+  if (!state.selected || state.selected.kind !== 'note') return;
+  if (!window.confirm(`确定删除随手记“${displayTitle(state.selected.title)}”及其附件吗？`)) return;
+  try {
+    await jsonRequest(`/v1/notes/${state.selected.id}`, { method: 'DELETE' });
+    const deletedId = state.selected.id;
+    closeDetail();
+    message('随手记已删除。');
+    await Promise.all([load(), loadFilterOptions('note')]);
+    restoreResultsFocus(String(deletedId));
+  } catch (error) { message(`删除失败：${error.message}`, true); }
 });
 $('#attachment-list').addEventListener('click', async (event) => {
   const link = event.target.closest('a[data-attachment-url]');
