@@ -469,6 +469,15 @@ def current_username(request: Request, *, required: bool = False) -> str:
     return username.casefold()
 
 
+def current_actor(request: Request, *, required: bool = False) -> str:
+    actor = unicodedata.normalize("NFKC", urllib.parse.unquote(request.headers.get("x-teamai-user", ""))).strip()
+    if len(actor) > 80 or any(ord(char) < 32 for char in actor):
+        raise HTTPException(status_code=400, detail="Invalid actor name")
+    if required and not actor:
+        raise HTTPException(status_code=400, detail="Provide your name to record who resolved this issue")
+    return actor
+
+
 def can_view_record(row, username: str) -> bool:
     return row["kind"] != "note" or row["visibility"] != "private" or bool(username and row["owner_username"] == username)
 
@@ -1093,7 +1102,7 @@ def delete_note(record_id: int, request: Request) -> dict[str, Any]:
     return {"deleted": True, "id": record_id}
 
 
-def update_issue(record_id: int, payload: SolutionIn, status: str) -> dict[str, Any]:
+def update_issue(record_id: int, payload: SolutionIn, status: str, actor: str = "") -> dict[str, Any]:
     if status == "resolved" and not (payload.verification or "").strip():
         raise HTTPException(status_code=422, detail="Verification evidence is required to resolve an issue")
     try:
@@ -1106,7 +1115,7 @@ def update_issue(record_id: int, payload: SolutionIn, status: str) -> dict[str, 
                 raise HTTPException(status_code=409, detail="Lifecycle actions are available only for issue records")
             extra = f"\n\n## {'解决方案' if status == 'resolved' else '追加解决方案'}\n\n{redact(payload.solution)}"
             if status == "resolved":
-                extra += f"\n\n## 验证结果\n\n{redact(payload.verification or '')}\n\n已由 {redact(payload.source)} 标记为已解决。"
+                extra += f"\n\n## 验证结果\n\n{redact(payload.verification or '')}\n\n处理人：{redact(actor)}。"
             stamp = now()
             new_content = row["content"] + extra
             new_hash = content_hash(row["title"], new_content)
@@ -1122,7 +1131,7 @@ def update_issue(record_id: int, payload: SolutionIn, status: str) -> dict[str, 
             conn.execute("UPDATE records SET content = ?, updated_at = ?, status = ?, content_hash = ?, sync_error = ?, knowledge_status = ? WHERE id = ?", (new_content, stamp, status, new_hash, sync_error, knowledge_status, record_id))
             event_type = {"in-progress": "solution_added", "resolved": "resolved", "triage": "reopened"}[status]
             summary = {"in-progress": "追加解决方案", "resolved": "问题已解决并进入知识审核", "triage": "问题重新打开"}[status]
-            record_event(conn, record_id, event_type, summary)
+            record_event(conn, record_id, event_type, summary, actor if status == "resolved" else "")
             if status == "triage" and row["kind"] == "issue" and row["knowledge_status"] == "published" and row["knowledge_record_id"]:
                 knowledge_status = "needs_review"
                 conn.execute("UPDATE records SET knowledge_status = ?, updated_at = ? WHERE id = ?", (knowledge_status, stamp, record_id))
@@ -1145,8 +1154,8 @@ def append_solution(record_id: int, payload: SolutionIn) -> dict[str, Any]:
 
 
 @app.post("/v1/issues/{record_id}/resolve")
-def resolve_issue(record_id: int, payload: SolutionIn) -> dict[str, Any]:
-    return update_issue(record_id, payload, "resolved")
+def resolve_issue(record_id: int, payload: SolutionIn, request: Request) -> dict[str, Any]:
+    return update_issue(record_id, payload, "resolved", current_actor(request, required=True))
 
 
 @app.post("/v1/issues/{record_id}/reopen")

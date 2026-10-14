@@ -26,7 +26,7 @@ TOOLS = [
     {"name": "teamai_get_issue", "description": "Get one record by id; provide username to access owned personal notes.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "username": {"type": "string"}}, "required": ["id"]}},
     {"name": "teamai_list_attachments", "description": "List files attached to a TeamAI record; provide username for personal notes.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "username": {"type": "string"}}, "required": ["id"]}},
     {"name": "teamai_append_solution", "description": "Append a solution to an issue.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "solution": {"type": "string"}}, "required": ["id", "solution"]}},
-    {"name": "teamai_resolve", "description": "Resolve an issue only after the fix is verified. Include the fix and test evidence.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "solution": {"type": "string"}, "verification": {"type": "string"}}, "required": ["id", "solution", "verification"]}},
+    {"name": "teamai_resolve", "description": "Resolve an issue only after the fix is verified. Include the fix, test evidence, and the resolver's display name (self-reported, not authenticated).", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "solution": {"type": "string"}, "verification": {"type": "string"}, "username": {"type": "string", "description": "Name to record as the resolver; this is self-reported and not authenticated."}}, "required": ["id", "solution", "verification", "username"]}},
     {"name": "teamai_knowledge_candidates", "description": "List resolved issues awaiting human review for promotion into team knowledge.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "teamai_publish_knowledge", "description": "Publish a curated knowledge article linked to a resolved issue. Call only after explicit human approval. In production, the API requires an authenticated proxy identity in the approver group.", "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}, "title": {"type": "string"}, "content": {"type": "string"}, "reviewer": {"type": "string", "description": "Development-mode audit label; production derives identity from the trusted proxy."}}, "required": ["id", "title", "content"]}},
 ]
@@ -76,7 +76,7 @@ def handle(message: dict):
         if name == "teamai_append_solution":
             return result(call("POST", f"/v1/issues/{args['id']}/append-solution", {"solution": args["solution"], "source": "mcp"}))
         if name == "teamai_resolve":
-            return result(call("POST", f"/v1/issues/{args['id']}/resolve", {"solution": args["solution"], "verification": args["verification"], "source": "mcp"}))
+            return result(call_for_user("POST", f"/v1/issues/{args['id']}/resolve", {"solution": args["solution"], "verification": args["verification"], "source": "mcp"}, username=args["username"]))
         if name == "teamai_knowledge_candidates":
             return result(call("GET", "/v1/knowledge/candidates"))
         if name == "teamai_publish_knowledge":

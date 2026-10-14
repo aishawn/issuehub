@@ -53,6 +53,7 @@ Use `teamai_append_solution` for an intermediate finding. A verified experience 
 ## Promote a resolved issue into team knowledge
 
 - Resolving an issue only puts it into the knowledge review queue. It does not publish it as reusable team knowledge.
+- Before resolving an issue, obtain the resolver's display name if it is not already available. Pass it as `username` to `teamai_resolve`; Web uses the currently selected username automatically, and CLI uses `TEAMAI_USER` or `--username`. The name is self-reported and is recorded in the issue activity history, not authenticated.
 - Suggest promotion only when the cause and fix are repeatable, useful beyond one person/session, and supported by verification evidence.
 - Draft a standalone knowledge article with symptoms, scope/project, stack/version, cause, fix, validation, and caveats. Keep credentials and unrelated private context out.
 - Show the proposed title and full article, identify the source issue, and obtain explicit human approval before calling `teamai_publish_knowledge`.

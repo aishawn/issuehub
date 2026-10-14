@@ -77,6 +77,7 @@ def main() -> None:
     resolve.add_argument("--solution", required=True)
     resolve.add_argument("--verification", required=True, help="How the fix was tested and the observed result")
     resolve.add_argument("--source", default="teamai-cli")
+    resolve.add_argument("--username", default=os.getenv("TEAMAI_USER", ""), help="Name to record as the person who resolved the issue (or set TEAMAI_USER)")
     knowledge = sub.add_parser("knowledge", help="Review and publish shared team knowledge")
     knowledge_sub = knowledge.add_subparsers(dest="knowledge_command", required=True)
     knowledge_sub.add_parser("candidates", help="List resolved issues awaiting knowledge review")
@@ -89,6 +90,11 @@ def main() -> None:
 
     if args.command in ("note", "notes", "search") and not getattr(args, "username", "").strip():
         raise SystemExit("note commands require --username or TEAMAI_USER")
+    if args.command == "resolve" and not args.username.strip():
+        if sys.stdin.isatty():
+            args.username = input("解决人姓名：").strip()
+        if not args.username:
+            raise SystemExit("resolve requires --username or TEAMAI_USER so the resolver can be recorded")
     if args.command in ("note", "issue"):
         path = "/v1/notes" if args.command == "note" else "/v1/issues"
         payload = {"content": args.content, "title": args.title, "source": args.source, "tags": args.tag, "project": args.project, "work_type": args.work_type, "tech_stack": args.tech}
@@ -137,7 +143,7 @@ def main() -> None:
         else:
             result = request("DELETE", f"/v1/notes/{args.id}", username=args.username)
     elif args.command == "resolve":
-        result = request("POST", f"/v1/issues/{args.id}/resolve", {"solution": args.solution, "verification": args.verification, "source": args.source})
+        result = request("POST", f"/v1/issues/{args.id}/resolve", {"solution": args.solution, "verification": args.verification, "source": args.source}, username=args.username)
     elif args.knowledge_command == "candidates":
         result = request("GET", "/v1/knowledge/candidates")
     else:
