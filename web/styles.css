@@ -336,3 +336,31 @@ body.admin-app{background:#f6f9fd;color:var(--ink);font:400 14px/1.55 var(--font
   .notes-toolbar .view-switch{max-width:100%;overflow-x:auto}
   .notes-toolbar .count{margin-left:0}
 }
+
+/* Overview: align the table's labels and values into a clear reading grid. */
+.overview-list .section-head{padding:15px 18px 10px;align-items:center}
+.overview-list .section-head h2{font-size:17px;line-height:1.45;font-weight:650;color:var(--ink)}
+.overview-table{width:100%;min-width:0;table-layout:fixed;text-align:left;font-size:13px}
+.overview-table th,.overview-table td{padding:10px 12px;border-top:1px solid #edf1f6;vertical-align:middle;text-align:left}
+.overview-table th{font-size:12px;line-height:1.4;font-weight:600;color:#71819a;background:#f8faff}
+.overview-table th:first-child,.overview-table td:first-child{width:40%}
+.overview-table th:nth-child(2),.overview-table td:nth-child(2){width:17%}
+.overview-table th:nth-child(3),.overview-table td:nth-child(3){width:17%}
+.overview-table th:nth-child(4),.overview-table td:nth-child(4){width:12%}
+.overview-table th:nth-child(5),.overview-table td:nth-child(5){width:14%}
+.overview-table td:first-child{min-width:0;white-space:normal}
+.overview-table td:first-child b{display:block;font-size:14px;line-height:1.45;font-weight:600;color:#172b4d;overflow-wrap:anywhere}
+.overview-table td:first-child small{display:block;margin-top:3px;font-size:12px;line-height:1.35;color:#71819a}
+.overview-table td:not(:first-child){font-size:13px;color:#42536e}
+.overview-table tbody tr{cursor:pointer;transition:background-color .15s ease}
+.overview-table tbody tr:hover{background:#f5f8ff}
+.overview-table .status-chip{white-space:nowrap}
+@media(max-width:720px){
+  .overview-list .section-head{padding:12px 13px 9px}
+  .overview-table th:nth-child(2),.overview-table td:nth-child(2),
+  .overview-table th:nth-child(3),.overview-table td:nth-child(3),
+  .overview-table th:nth-child(5),.overview-table td:nth-child(5){display:none}
+  .overview-table th:first-child,.overview-table td:first-child{width:76%}
+  .overview-table th:nth-child(4),.overview-table td:nth-child(4){width:24%}
+  .overview-table th,.overview-table td{padding:9px 10px}
+}
