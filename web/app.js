@@ -1,4 +1,4 @@
-const state = { page: 'overview', layout: 'table', kind: 'issue', query: '', status: '', kindFilter: 'issue', noteVisibility: '', selected: null, offset: 0, hasMore: false, requestId: 0, summary: null };
+const state = { page: 'overview', layout: 'table', kind: 'issue', query: '', status: '', kindFilter: 'issue', noteVisibility: '', filters: { issue: { project: '', workType: '' }, note: { project: '', workType: '' } }, selected: null, offset: 0, hasMore: false, requestId: 0, summary: null };
 const $ = (selector) => document.querySelector(selector);
 const detailFocus = createDetailFocus(() => {
   const id = Number(state.selected?.id);
@@ -59,7 +59,8 @@ function render(rows, append = false) {
     ? document.activeElement.closest('[data-id]').dataset.id
     : null;
   if (!append && rows.length === 0) {
-    const filtered = Boolean(state.query || state.status || state.noteVisibility);
+    const activeFilters = state.filters[state.kindFilter] || {};
+    const filtered = Boolean(state.query || state.status || state.noteVisibility || activeFilters.project || activeFilters.workType);
     if (state.page === 'notes') {
       box.innerHTML = filtered
         ? `<div class="empty"><div class="empty-copy"><strong>还没有符合条件的随手记</strong><span>调整可见范围或搜索关键词</span></div></div>`
@@ -113,6 +114,27 @@ function syncTopNewRecord(page) {
   button.setAttribute('aria-label', isNotes ? '新建随手记' : '新建记录');
 }
 
+async function loadFilterOptions(kind) {
+  const prefix = kind === 'note' ? 'notes' : 'issues';
+  try {
+    const options = await jsonRequest(`/v1/filter-options?kind=${kind}`);
+    const projectSelect = $(`#${prefix}-project-filter`);
+    const workTypeSelect = $(`#${prefix}-work-type-filter`);
+    const filters = state.filters[kind];
+    const previousProject = filters.project;
+    const previousWorkType = filters.workType;
+    projectSelect.innerHTML = `<option value="">全部项目</option><option value="__unassigned__">未指定项目</option>${options.projects.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('')}`;
+    workTypeSelect.innerHTML = `<option value="">全部工作类型</option>${options.work_types.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('')}`;
+    filters.project = [...projectSelect.options].some((option) => option.value === previousProject) ? previousProject : '';
+    filters.workType = [...workTypeSelect.options].some((option) => option.value === previousWorkType) ? previousWorkType : '';
+    projectSelect.value = filters.project;
+    workTypeSelect.value = filters.workType;
+    if ((filters.project !== previousProject || filters.workType !== previousWorkType) && state.kindFilter === kind) loadRecords();
+  } catch (error) {
+    message(`筛选选项加载失败：${error.message}`, true);
+  }
+}
+
 function setPage(page) {
   const changed = state.page !== page;
   if (changed) {
@@ -126,8 +148,8 @@ function setPage(page) {
   $('#search').placeholder = page === 'notes' ? '搜索随手记…' : page === 'issues' ? '搜索问题…' : '搜索问题…';
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.page === page));
   document.querySelectorAll('.page-view').forEach((view) => view.classList.toggle('hidden', view.dataset.view !== page));
-  if (page === 'issues') { state.kindFilter = 'issue'; state.status = $('#status-filter').value; loadRecords(); }
-  if (page === 'notes') { state.kindFilter = 'note'; state.status = ''; loadRecords(); }
+  if (page === 'issues') { state.kindFilter = 'issue'; state.status = $('#status-filter').value; loadFilterOptions('issue'); loadRecords(); }
+  if (page === 'notes') { state.kindFilter = 'note'; state.status = ''; loadFilterOptions('note'); loadRecords(); }
 }
 
 function updateLoadMore() {
@@ -154,6 +176,9 @@ async function loadRecords(append = false) {
   if (state.kindFilter) params.set('kind', state.kindFilter);
   if (state.status) params.set('status', state.status);
   if (state.page === 'notes' && state.noteVisibility) params.set('visibility', state.noteVisibility);
+  const filters = state.filters[state.kindFilter] || {};
+  if (filters.project) params.set('project', filters.project);
+  if (filters.workType) params.set('work_type', filters.workType);
   const button = state.page === 'notes' ? $('#notes-load-more') : $('#load-more');
   if (append && button) { button.disabled = true; button.textContent = '正在加载…'; }
   resultsBox().setAttribute('aria-busy', 'true');
@@ -366,6 +391,17 @@ document.querySelectorAll('[data-layout]').forEach((button) => button.addEventLi
   loadRecords();
 }));
 $('#status-filter').addEventListener('change', (event) => { state.status = event.target.value; loadRecords(); });
+[
+  ['issues-project-filter', 'issue', 'project'],
+  ['issues-work-type-filter', 'issue', 'workType'],
+  ['notes-project-filter', 'note', 'project'],
+  ['notes-work-type-filter', 'note', 'workType'],
+].forEach(([id, kind, key]) => {
+  $(`#${id}`).addEventListener('change', (event) => {
+    state.filters[kind][key] = event.target.value;
+    if (state.kindFilter === kind) loadRecords();
+  });
+});
 document.querySelectorAll('[data-note-filter]').forEach((button) => button.addEventListener('click', () => {
   state.noteVisibility = button.dataset.noteFilter;
   document.querySelectorAll('[data-note-filter]').forEach((item) => {

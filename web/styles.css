@@ -364,3 +364,16 @@ body.admin-app{background:#f6f9fd;color:var(--ink);font:400 14px/1.55 var(--font
   .overview-table th:nth-child(4),.overview-table td:nth-child(4){width:24%}
   .overview-table th,.overview-table td{padding:9px 10px}
 }
+.record-filters{display:flex;align-items:center;gap:8px;min-width:0}
+.record-filters label,.issues-controls>label{display:block;margin:0;min-width:0}
+.record-filters select,.issues-controls>label select{width:auto;min-width:142px;max-width:190px;min-height:38px;padding:7px 10px;border-color:var(--line);border-radius:8px;background:#fff;color:#42536e;font-size:13px}
+.issues-controls{flex-wrap:wrap}
+.notes-toolbar{flex-wrap:wrap}
+@media(max-width:1000px){
+  .notes-toolbar{align-items:flex-start}
+  .record-filters{flex:1}
+}
+@media(max-width:720px){
+  .record-filters{width:100%;flex:1 1 100%}
+  .record-filters label,.record-filters select{flex:1;min-width:0;max-width:none;width:100%}
+}

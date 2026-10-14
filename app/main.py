@@ -842,7 +842,7 @@ def overview(request: Request) -> dict[str, Any]:
 
 
 @app.get("/v1/search")
-def search(request: Request, q: str = Query(default="", max_length=200), kind: str | None = None, status: str | None = None, source: str | None = None, knowledge_status: Literal["pending_review", "needs_review", "review"] | None = None, visibility: Literal["shared", "private"] | None = None, limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0)) -> list[dict[str, Any]]:
+def search(request: Request, q: str = Query(default="", max_length=200), kind: str | None = None, status: str | None = None, source: str | None = None, knowledge_status: Literal["pending_review", "needs_review", "review"] | None = None, visibility: Literal["shared", "private"] | None = None, project: str | None = Query(default=None, max_length=180), work_type: str | None = Query(default=None, max_length=80), limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0)) -> list[dict[str, Any]]:
     term = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     query = f"%{term}%"
     username = current_username(request)
@@ -857,6 +857,14 @@ def search(request: Request, q: str = Query(default="", max_length=200), kind: s
     if status:
         sql += " AND status = ?"
         params.append(status)
+    if project == "__unassigned__":
+        sql += " AND COALESCE(project, '') = ''"
+    elif project and project.strip():
+        sql += " AND project = ?"
+        params.append(project.strip())
+    if work_type and work_type.strip():
+        sql += " AND work_type = ?"
+        params.append(work_type.strip())
     if source:
         sql += " AND source = ?"
         params.append(source)
@@ -871,6 +879,24 @@ def search(request: Request, q: str = Query(default="", max_length=200), kind: s
     params.extend([limit, offset])
     with db() as conn:
         return [response(row) for row in conn.execute(sql, params).fetchall()]
+
+
+@app.get("/v1/filter-options")
+def filter_options(request: Request, kind: Literal["issue", "note"] = Query(...)) -> dict[str, list[str]]:
+    username = current_username(request)
+    visible = "(kind != 'note' OR visibility != 'private' OR owner_username = ?)"
+    with db() as conn:
+        projects = conn.execute(
+            f"SELECT DISTINCT project FROM records WHERE {visible} AND kind = ? AND TRIM(project) != '' ORDER BY LOWER(project), project",
+            (username, kind),
+        ).fetchall()
+        work_types = conn.execute(
+            f"SELECT DISTINCT work_type FROM records WHERE {visible} AND kind = ? AND TRIM(work_type) != '' ORDER BY work_type",
+            (username, kind),
+        ).fetchall()
+    standard_work_types = ["算法调研", "算法预研", "模型部署", "组件开发", "项目支撑", "工作日常"]
+    available_work_types = dict.fromkeys(standard_work_types + [row["work_type"] for row in work_types])
+    return {"projects": [row["project"] for row in projects], "work_types": list(available_work_types)}
 
 
 @app.get("/v1/issues/{record_id}")

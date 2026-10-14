@@ -139,6 +139,10 @@
           <button type="button" data-note-filter="shared" aria-pressed="false">团队共享</button>
           <button type="button" data-note-filter="private" aria-pressed="false">我的个人视图</button>
         </div>
+        <div class="record-filters" aria-label="随手记筛选条件">
+          <label><span class="visually-hidden">按项目筛选</span><select id="notes-project-filter" aria-label="按项目筛选"><option value="">全部项目</option></select></label>
+          <label><span class="visually-hidden">按工作类型筛选</span><select id="notes-work-type-filter" aria-label="按工作类型筛选"><option value="">全部工作类型</option></select></label>
+        </div>
         <span id="notes-count" class="count">0 条</span>
       </div>
       <div id="notes-results" class="panel records-panel notes-records" aria-live="polite" aria-busy="false">
@@ -162,6 +166,8 @@
               <option value="resolved">已解决</option>
             </select>
           </label>
+          <label><span class="visually-hidden">按项目筛选</span><select id="issues-project-filter" aria-label="按项目筛选"><option value="">全部项目</option></select></label>
+          <label><span class="visually-hidden">按工作类型筛选</span><select id="issues-work-type-filter" aria-label="按工作类型筛选"><option value="">全部工作类型</option></select></label>
           <div class="view-switch" role="group" aria-label="问题显示方式">
             <button class="selected" data-layout="table" type="button">列表</button>
             <button data-layout="board" type="button">看板</button>
