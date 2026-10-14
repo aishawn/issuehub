@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f3f7fb">
+  <title>使用手册 · TeamAI Issue Hub</title>
+  <style>
+    :root{--ink:#172b4d;--muted:#5c6b80;--line:#dfe7ef;--paper:#fff;--canvas:#f3f7fb;--blue:#176c9a;--blue-soft:#eaf4fa;--mint:#eaf7f1;--amber:#fff6e5;--shadow:0 16px 42px #15344e0d}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(850px 360px at 85% -8%,#dcecf6 0,transparent 68%),var(--canvas);color:var(--ink);font:15px/1.6 "Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif}.page{width:min(1120px,100% - 40px);margin:auto;padding:32px 0 56px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:34px}.brand{display:flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;font-size:14px;font-weight:700}.brand-mark{width:32px;height:32px;display:grid;place-items:center;border-radius:9px;background:var(--blue);color:white;font-weight:800}.back{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:8px 13px;border:1px solid var(--line);border-radius:9px;background:#fff;color:#40536a;text-decoration:none;font-size:13px;font-weight:650}.back:hover,.cta:hover{transform:translateY(-1px)}.hero{display:grid;grid-template-columns:1.05fr .95fr;gap:24px;align-items:center;margin-bottom:22px}.eyebrow{margin:0 0 8px;color:var(--blue);font-size:10px;font-weight:800;letter-spacing:.14em}.hero h1{margin:0;font-size:clamp(30px,5vw,46px);line-height:1.16;letter-spacing:-.035em}.hero p{max-width:520px;margin:13px 0 0;color:var(--muted);font-size:15px}.hero-art{padding:16px 20px 10px;border:1px solid #d8e6ef;border-radius:18px;background:linear-gradient(145deg,#fff,#f7fbfd);box-shadow:var(--shadow)}.flow{width:100%;height:auto;display:block}.flow text,.mini-map text{font-family:inherit}.flow-title{font-size:14px;font-weight:750;fill:#263c56}.flow-label{font-size:11px;fill:#53667d}.flow-sub{font-size:10px;fill:#728199}.section-heading{display:flex;align-items:end;justify-content:space-between;gap:14px;margin:34px 0 13px}.section-heading h2{margin:0;font-size:18px;letter-spacing:-.02em}.section-heading p{margin:0;color:#738197;font-size:12px}.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.feature{min-height:152px;padding:17px;border:1px solid var(--line);border-radius:14px;background:var(--paper);box-shadow:0 6px 18px #15344e07}.feature-top{display:flex;align-items:center;gap:10px;margin-bottom:10px}.icon{width:34px;height:34px;display:grid;place-items:center;flex:none;border:1px solid #d5e6ef;border-radius:10px;background:var(--blue-soft);color:var(--blue)}.icon svg{width:18px;height:18px}.feature h3{margin:0;font-size:14px}.feature p{margin:0;color:var(--muted);font-size:12px;line-height:1.65}.feature b{color:#304760}.use-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.use-card{padding:20px;border:1px solid var(--line);border-radius:15px;background:#fff}.use-card h3{margin:0 0 13px;font-size:15px}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.step{position:relative;min-height:72px;padding:12px;border-radius:10px;background:#f5f8fb}.step strong{display:block;font-size:12px}.step span{display:block;margin-top:4px;color:var(--muted);font-size:11px}.number{display:grid;place-items:center;width:20px;height:20px;margin-bottom:8px;border-radius:50%;background:#ddecf4;color:var(--blue);font-size:10px;font-weight:800}.visibility{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;margin:14px 0}.scope{padding:13px;border:1px solid var(--line);border-radius:10px;background:#fbfcfd;text-align:center}.scope strong,.scope span{display:block}.scope strong{font-size:12px}.scope span{margin-top:3px;color:var(--muted);font-size:11px}.arrow{color:var(--blue);font-weight:800}.notice{display:flex;gap:9px;align-items:flex-start;margin-top:12px;padding:10px 12px;border:1px solid #f1dfb7;border-radius:9px;background:var(--amber);color:#755317;font-size:11px}.notice svg{width:16px;height:16px;flex:none;margin-top:1px}.cli{overflow:hidden;border:1px solid #263b52;border-radius:13px;background:#132238;color:#e8f0f6}.cli-head{display:flex;align-items:center;gap:6px;padding:11px 14px;border-bottom:1px solid #2c4057;color:#afc2d3;font-size:11px}.cli-head i{width:7px;height:7px;border-radius:50%;background:#57b485}.cli pre{margin:0;padding:15px;overflow-x:auto;font:12px/1.8 ui-monospace,Consolas,monospace}.cli code{font:inherit}.cli .comment{color:#90a7bc}.file-types{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}.file-types span{padding:4px 8px;border:1px solid #dfe8ef;border-radius:999px;background:#f9fbfc;color:#516278;font-size:10px}.bottom{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-top:20px;padding:20px;border:1px solid #cfe0ea;border-radius:15px;background:linear-gradient(110deg,#eaf4fa,#f8fbfd)}.bottom h2{margin:0;font-size:16px}.bottom p{margin:3px 0 0;color:var(--muted);font-size:12px}.cta{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:46px;padding:10px 16px;border:0;border-radius:10px;background:var(--blue);color:#fff;text-decoration:none;font-size:13px;font-weight:750;box-shadow:0 5px 14px #176c9a26;transition:transform .16s}.cta svg{width:17px;height:17px}.foot{display:flex;justify-content:space-between;gap:10px;margin-top:20px;color:#8591a1;font-size:10px}.foot a{color:var(--blue);text-decoration:none}
+    @media(max-width:760px){.page{width:min(100% - 28px,560px);padding-top:18px}.top{margin-bottom:22px}.hero{grid-template-columns:1fr;gap:16px}.hero h1{font-size:34px}.hero-art{padding:8px}.feature-grid{grid-template-columns:1fr 1fr}.feature{min-height:138px;padding:14px}.use-row{grid-template-columns:1fr}.section-heading{align-items:flex-start;flex-direction:column;gap:3px;margin-top:26px}.bottom{align-items:flex-start;flex-direction:column}.cta{width:100%}}
+    @media(max-width:460px){.feature-grid{grid-template-columns:1fr}.feature{min-height:unset}.steps{grid-template-columns:1fr}.step{min-height:unset}.visibility{grid-template-columns:1fr}.arrow{justify-self:center;transform:rotate(90deg)}.foot{flex-direction:column}.back{font-size:12px;padding:7px 9px}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;scroll-behavior:auto!important}}
+  </style>
+</head>
+<body>
+<main class="page">
+  <header class="top">
+    <a class="brand" href="/"><span class="brand-mark">T</span><span>TeamAI Issue Hub</span></a>
+    <a class="back" href="/" aria-label="返回工作台"><span aria-hidden="true">←</span> 返回工作台</a>
+  </header>
+  <section class="hero" aria-labelledby="title">
+    <div><p class="eyebrow">QUICK GUIDE · 2 MIN READ</p><h1 id="title">把问题和经验，<br>放进同一条工作流</h1><p>记录、查找、跟进和复用。可以从 Web 开始，也可以在 AI 对话或终端中完成。</p></div>
+    <div class="hero-art">
+      <svg class="flow" viewBox="0 0 640 190" role="img" aria-labelledby="flow-title flow-desc">
+        <title id="flow-title">从记录到复用的工作流</title><desc id="flow-desc">记录问题或随手记，补充方案和验证，再将可复用经验沉淀到团队知识。</desc>
+        <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 8 4 0 8z" fill="#8aa9bb"/></marker></defs>
+        <path d="M141 85H204M296 85H359M451 85H514" fill="none" stroke="#9bb4c3" stroke-width="2" marker-end="url(#arrow)"/>
+        <g><rect x="12" y="35" width="130" height="100" rx="15" fill="#edf6fb" stroke="#cfe2ed"/><circle cx="38" cy="61" r="13" fill="#d9ebf5"/><path d="M33 61h10m-10 5h8" stroke="#176c9a" stroke-width="1.7" stroke-linecap="round"/><text x="33" y="97" class="flow-title">记下来</text><text x="33" y="117" class="flow-sub">问题 · 想法 · 待办</text></g>
+        <g><rect x="207" y="35" width="130" height="100" rx="15" fill="#fff" stroke="#dfe7ef"/><circle cx="233" cy="61" r="13" fill="#eef2f7"/><path d="m228 61 4 4 7-8" fill="none" stroke="#52667b" stroke-width="1.7" stroke-linecap="round"/><text x="228" y="97" class="flow-title">补充处理</text><text x="228" y="117" class="flow-sub">过程 · 方案 · 附件</text></g>
+        <g><rect x="402" y="35" width="130" height="100" rx="15" fill="#fff" stroke="#dfe7ef"/><circle cx="428" cy="61" r="13" fill="#eef2f7"/><path d="M423 61h10m-5-5 5 5-5 5" fill="none" stroke="#52667b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><text x="423" y="97" class="flow-title">验证结果</text><text x="423" y="117" class="flow-sub">完成 · 可复查</text></g>
+        <g><rect x="517" y="35" width="110" height="100" rx="15" fill="#edf8f2" stroke="#cde8d8"/><circle cx="543" cy="61" r="13" fill="#dff1e6"/><path d="M538 62h10m-5-5 5 5-5 5" fill="none" stroke="#25815e" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><text x="538" y="97" class="flow-title">团队复用</text><text x="538" y="117" class="flow-sub">审核后发布</text></g>
+        <text x="320" y="169" text-anchor="middle" class="flow-label">从一条记录开始，需要时再补全</text>
+      </svg>
+    </div>
+  </section>
+
+  <section aria-labelledby="features-title">
+    <div class="section-heading"><h2 id="features-title">工作台能做什么</h2><p>三个入口，覆盖日常协作</p></div>
+    <div class="feature-grid">
+      <article class="feature"><div class="feature-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><h3>总览</h3></div><p>查看问题状态、最近更新和快捷操作。点击统计卡片可进入对应问题列表。</p></article>
+      <article class="feature"><div class="feature-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span><h3>问题</h3></div><p>按状态、项目和工作类型查找；在详情里补充处理方案，验证后标记已解决。</p></article>
+      <article class="feature"><div class="feature-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="m16.5 3.5 4 4L7 21l-4 1 1-4Z"/></svg></span><h3>随手记</h3></div><p>记录想法、资料和待办。按项目、工作类型、可见范围筛选；创建者可编辑、删除及添加附件。</p></article>
+    </div>
+  </section>
+
+  <section aria-labelledby="start-title">
+    <div class="section-heading"><h2 id="start-title">怎么开始使用</h2><p>选择顺手的入口</p></div>
+    <div class="use-row">
+      <article class="use-card"><h3>Web 工作台</h3><div class="steps"><div class="step"><i class="number">1</i><strong>输入用户名</strong><span>首次进入时设置，浏览器会记住</span></div><div class="step"><i class="number">2</i><strong>新建记录</strong><span>选择问题或随手记，填写项目和类型</span></div><div class="step"><i class="number">3</i><strong>搜索与处理</strong><span>打开详情，更新内容或添加文件</span></div></div></article>
+      <article class="use-card"><h3>AI 助手 / CLI</h3><div class="cli"><div class="cli-head"><i></i><i></i><i></i><span style="margin-left:6px">命令行示例</span></div><pre><code><span class="comment"># 配置常用用户名</span>
+$env:TEAMAI_USER="alice"
+
+python teamai_cli.py note "记录内容" `
+  --project demo --work-type 工作日常 `
+  --visibility private
+
+python teamai_cli.py notes list --project demo
+python teamai_cli.py notes get 12
+python teamai_cli.py notes update 12 --title "新标题"
+python teamai_cli.py notes delete 12</code></pre></div></article>
+    </div>
+  </section>
+
+  <section aria-labelledby="visibility-title">
+    <div class="section-heading"><h2 id="visibility-title">记录放在哪里</h2><p>在保存时选择范围</p></div>
+    <article class="use-card">
+      <div class="visibility" aria-label="随手记可见范围说明"><div class="scope"><strong>团队共享</strong><span>所有工作台用户可查找</span></div><span class="arrow" aria-hidden="true">← 用户名 →</span><div class="scope"><strong>个人视图</strong><span>按用户名显示给当前用户</span></div></div>
+      <div class="notice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01" stroke-linecap="round"/></svg><span>用户名免密、不验证身份，知道用户名的人可以冒用。个人视图只是弱隔离，请勿保存敏感资料。</span></div>
+    </article>
+  </section>
+
+  <section aria-labelledby="files-title">
+    <div class="section-heading"><h2 id="files-title">随记可以带附件</h2><p>在记录详情中添加文件</p></div>
+    <article class="use-card"><p style="margin:0;color:var(--muted);font-size:13px">单个文件最大 20 MiB，每条最多 30 个。</p><div class="file-types" aria-label="支持的附件格式"><span>PDF</span><span>PPT / PPTX</span><span>DOC / DOCX</span><span>XLS / XLSX</span><span>Markdown</span><span>HTML</span><span>TXT</span><span>PNG / JPG / GIF / WebP</span></div></article>
+  </section>
+
+  <section class="bottom" aria-label="方案说明入口"><div><h2>想了解系统怎么设计？</h2><p>查看入口、服务、数据存储和同步关系图。</p></div><a class="cta" href="/architecture">查看方案说明 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></section>
+  <footer class="foot"><span>TeamAI Issue Hub · 使用手册</span><a href="/">返回工作台</a></footer>
+</main>
+</body>
+</html>

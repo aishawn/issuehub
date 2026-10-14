@@ -30,6 +30,16 @@
 @media(max-width:420px){.page-topbar .eyebrow{letter-spacing:.08em}.top-actions{display:grid;grid-template-columns:auto minmax(0,1fr) 44px}.top-actions #user-switch{max-width:112px;min-width:0;font-size:11px}.global-search{width:100%;padding:0 8px}.global-search input{font-size:12px}.notes-intro .primary{width:100%}}
 @media(prefers-reduced-motion:reduce){.detail{animation:none}}
 
+/* Handbook entry in the sidebar footer */
+.sidebar-bottom{display:grid;gap:12px;align-items:stretch}
+.sidebar-help{display:flex;align-items:center;gap:10px;min-height:44px;padding:9px 10px;border:1px solid #e1e8ef;border-radius:9px;background:#f8fafc;color:#40536a;text-decoration:none;font-size:12px;font-weight:650;transition:background .15s ease,border-color .15s ease}
+.sidebar-help svg{width:17px;height:17px;flex:none;color:var(--primary)}
+.sidebar-help .help-arrow{width:14px;height:14px;margin-left:auto;color:#8493a4}
+.sidebar-help:hover{border-color:#b8d3e1;background:#eff7fa;color:var(--primary-dark)}
+.sidebar-help:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
+.sidebar-health{display:flex;align-items:center;gap:8px}
+@media(max-width:720px){.sidebar-bottom{position:fixed;z-index:11;left:9px;bottom:72px;display:block;margin:0;padding:0;border:0}.sidebar-health{display:none}.sidebar-help{min-height:42px;padding:8px 11px;border-radius:999px;background:#fff;box-shadow:0 5px 16px #16344b24}}
+
 /* ===== UI polish: calm workspace ===== */
 .admin-app{
   background:

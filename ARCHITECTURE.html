@@ -33,6 +33,7 @@
 
         <!-- flow paths behind nodes -->
         <path class="flow" d="M286 145 H355 V218 H405"/><path class="flow" d="M286 285 H370 V252 H405"/><path class="flow" d="M286 425 H355 V286 H405"/>
+        <path class="flow-muted" d="M815 220 H868 V398 H900"/>
         <path class="flow" d="M815 228 H900"/><path class="optional" d="M815 386 H857 V510 H900"/>
         <path class="flow-muted" d="M900 553 H855 V415 H815"/>
         <path class="flow-dash" d="M905 335 V650 H650 V615"/>
@@ -78,7 +79,10 @@
         <ellipse cx="950" cy="177" rx="25" ry="9" fill="#cbd5e1"/><path d="M925 177v34c0 5 11 9 25 9s25-4 25-9v-34m-50 16c0 5 11 9 25 9s25-4 25-9" fill="#e2e8f0" stroke="#64748b" stroke-width="1.5"/>
         <text x="990" y="177" class="title">PostgreSQL</text><text x="990" y="201" class="small">Compose 生产主数据库</text>
         <line x1="925" y1="239" x2="1165" y2="239" stroke="#e2e8f0"/>
-        <text x="925" y="267" class="label">问题 + 已审核知识</text><text x="925" y="291" class="tiny">项目 / 技术栈 / 审核状态</text><text x="925" y="313" class="tiny">来源 Issue ID / 审核人标识</text>
+        <text x="925" y="267" class="label">问题 · 随手记 · 团队知识</text><text x="925" y="291" class="tiny">项目 / 工作类型 / 可见范围</text><text x="925" y="313" class="tiny">记录归属、附件索引和审核状态</text>
+        <rect x="900" y="365" width="290" height="68" rx="16" fill="#f0fdfa" stroke="#99d8c8" stroke-width="1.5"/>
+        <rect x="925" y="382" width="34" height="31" rx="7" fill="#d8f3eb"/><path d="M932 390h20v14h-20zM932 394h20" fill="none" stroke="#16836b" stroke-width="1.5"/>
+        <text x="975" y="392" class="label" style="fill:#116b58">对象存储 · MinIO / S3</text><text x="975" y="414" class="tiny">可选 · PPT / 文档 / 图片等附件</text>
         <rect x="900" y="452" width="290" height="205" rx="20" class="gitlab"/>
         <circle cx="948" cy="498" r="24" class="icon-orange"/><path d="m935 503 5-17 8 7 8-7 5 17-13 10z" fill="#f97316"/>
         <text x="990" y="497" class="title">GitLab CE</text><text x="990" y="522" class="small">可选 · 原始 Issue 协作</text>
@@ -105,7 +109,7 @@
     <article class="card"><h3><i class="dot db"></i>部署与审核边界</h3><p>Compose 使用 PostgreSQL；生产审核从可信登录代理读取身份和审核组。Skill 使用 MCP，teamai-cli 可以选装。</p><div class="flowline"><span class="step">Skill / Web</span><b class="arrow">→</b><span class="step">HTTPS / 登录代理</span><b class="arrow">→</b><span class="step">TeamAI API</span></div></article>
   </section>
 
-  <footer class="fineprint"><span>实现依据：<code>app/main.py</code> · <code>skills/teamai-capture</code> · <code>mcp_server.py</code> · <code>teamai_migrate.py</code></span><span><a href="README.md">项目 README</a> · <a href="PRODUCTION.md">部署与运维</a></span></footer>
+  <footer class="fineprint"><span>业务数据保存在 PostgreSQL；附件文件保存在对象存储。</span><span><a href="/web/manual.html">返回使用手册</a> · <a href="README.md">项目 README</a> · <a href="PRODUCTION.md">部署与运维</a></span></footer>
 </main>
 </body>
 </html>

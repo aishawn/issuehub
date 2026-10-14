@@ -516,8 +516,9 @@ def add_security_headers(response: Response, request_id: str, path: str) -> Resp
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     if path.startswith("/v1/") or path == "/health":
         response.headers["Cache-Control"] = "no-store"
-    if path == "/" or path.startswith("/web/"):
-        response.headers["Content-Security-Policy"] = "default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; font-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'"
+    if path == "/" or path.startswith("/web/") or path == "/architecture":
+        style_source = "'self' 'unsafe-inline'" if path in {"/web/manual.html", "/architecture"} else "'self'"
+        response.headers["Content-Security-Policy"] = f"default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; font-src 'self'; script-src 'self'; style-src {style_source}; connect-src 'self'"
     return response
 
 
@@ -718,6 +719,11 @@ def create_record(record: RecordIn, kind: Literal["note", "issue", "solution"], 
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/architecture")
+def architecture() -> FileResponse:
+    return FileResponse(ROOT / "ARCHITECTURE.html")
 
 
 @app.get("/health")
