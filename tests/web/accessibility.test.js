@@ -39,6 +39,17 @@ test('status filter buttons expose their initial pressed state', () => {
   assert.deepEqual(states, ['true', 'false', 'false', 'false']);
 });
 
+test('main navigation keeps only the core workspace views', () => {
+  for (const page of ['overview', 'issues', 'notes']) assert.match(html, new RegExp(`data-page="${page}"`));
+  for (const page of ['review', 'knowledge', 'sync']) assert.doesNotMatch(html, new RegExp(`data-page="${page}"|data-view="${page}"`));
+  assert.doesNotMatch(html, /待知识审核|打开待审核队列|团队知识库|同步管理/);
+});
+
+test('issue workspace no longer renders knowledge review controls', () => {
+  const app = fs.readFileSync(path.join(root, 'web/app.js'), 'utf8');
+  assert.doesNotMatch(app, /publish-knowledge|knowledge-review|loadQueue\(/);
+});
+
 test('muted text meets WCAG AA contrast on the application surfaces', () => {
   const muted = colorToken('--muted');
   const paper = colorToken('--paper');
@@ -57,7 +68,7 @@ test('blue primary actions and links meet WCAG AA contrast', () => {
   const primaryDark = colorToken('--primary-dark');
   const accentSoft = colorToken('--accent-soft');
 
-  assert.equal(primary, '#2563eb', 'The primary action color should use the blue product palette');
+  assert.equal(primary, '#0B6E99', 'The primary action color should use the teal-blue product palette');
   assert.ok(contrast('#ffffff', primary) >= 4.5, 'White button text must remain readable on blue actions');
   assert.ok(contrast(primaryDark, '#ffffff') >= 4.5, 'Blue links must remain readable on white surfaces');
   assert.ok(contrast(primaryDark, accentSoft) >= 4.5, 'Selected blue states must retain readable labels');

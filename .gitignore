@@ -13,4 +13,5 @@ teamai.db
 teamai.db-wal
 teamai.db-shm
 backups/
+*.dump
 *.pre-restore-*.db

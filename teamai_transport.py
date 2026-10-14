@@ -42,7 +42,7 @@ def validate_api_url() -> None:
         raise TeamAIRequestError("Invalid TEAMAI_API_KEY: use visible ASCII characters without spaces")
 
 
-def request(method: str, path: str, payload: dict | None = None):
+def request(method: str, path: str, payload: dict | None = None, username: str | None = None):
     validate_api_url()
     if not path.startswith("/") or path.startswith("//"):
         raise TeamAIRequestError("Invalid TeamAI API path")
@@ -50,6 +50,9 @@ def request(method: str, path: str, payload: dict | None = None):
     headers = {"Content-Type": "application/json"}
     if API_KEY:
         headers["X-TeamAI-Key"] = API_KEY
+    active_user = username if username is not None else os.getenv("TEAMAI_USER", "")
+    if active_user:
+        headers["X-TeamAI-User"] = urllib.parse.quote(active_user, safe="")
     req = urllib.request.Request(f"{API.rstrip('/')}{path}", method=method, data=body, headers=headers)
     try:
         opener = urllib.request.build_opener(_RejectRedirects())

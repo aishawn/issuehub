@@ -7,8 +7,8 @@
         if (opener === null) opener = trigger;
         heading.focus({ preventScroll: true });
       },
-      close() {
-        const target = opener?.isConnected ? opener : (typeof fallback === 'function' ? fallback() : fallback);
+      close(returnFocusTo) {
+        const target = returnFocusTo?.isConnected ? returnFocusTo : opener?.isConnected ? opener : (typeof fallback === 'function' ? fallback() : fallback);
         opener = null;
         target.focus();
       },

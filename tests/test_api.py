@@ -24,6 +24,7 @@ BACKUP_TEST_SCHEMA = """CREATE TABLE records (
 
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_DB", str(tmp_path / "test.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("SYNC_INTERVAL_SECONDS", "60")
     monkeypatch.delenv("TEAMAI_API_KEY", raising=False)
@@ -41,18 +42,161 @@ def test_issue_lifecycle_and_overview(tmp_path, monkeypatch):
         issue = created.json()
         assert issue["kind"] == "issue"
         assert "mcp" in issue["tags"]
+        api.post("/v1/notes", json={"content": "Note status must not inflate issue metrics"})
 
         assert api.get("/v1/search", params={"source": "qwen-code", "kind": "issue"}).json()[0]["id"] == issue["id"]
         assert api.get("/v1/overview").json()["by_status"]["triage"] == 1
+        assert api.get("/v1/overview").json()["total"] == 2
 
-        resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "补充 MCP 配置并重启", "source": "test"})
+        resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "补充 MCP 配置并重启", "verification": "重新启动服务后运行 MCP ping，连续两次成功", "source": "test"})
         assert resolved.status_code == 200
         assert resolved.json()["status"] == "resolved"
         assert "补充 MCP 配置" in resolved.json()["content"]
+        assert "连续两次成功" in resolved.json()["content"]
+        assert resolved.json()["knowledge_status"] == "pending_review"
         assert api.get("/v1/overview").json()["by_status"]["resolved"] == 1
         reopened = api.post(f"/v1/issues/{issue['id']}/reopen", json={"solution": "回归后重新打开", "source": "test"})
         assert reopened.status_code == 200
         assert reopened.json()["status"] == "triage"
+        events = api.get(f"/v1/issues/{issue['id']}").json()["events"]
+        assert [event["event_type"] for event in events][:3] == ["reopened", "resolved", "created"]
+
+
+def test_work_type_is_saved_searchable_editable_and_copied_to_knowledge(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        issue = api.post("/v1/issues", json={
+            "title": "Algorithm exploration", "content": "Compare two candidate algorithms.",
+            "project": "recommendation", "work_type": "算法调研",
+        }).json()
+        assert issue["work_type"] == "算法调研"
+        assert api.get("/v1/search", params={"q": "算法调研"}).json()[0]["id"] == issue["id"]
+        edited = api.put(f"/v1/records/{issue['id']}", json={
+            "expected_updated_at": issue["updated_at"], "title": issue["title"],
+            "content": issue["content"], "project": "recommendation", "work_type": "算法预研",
+        })
+        assert edited.json()["work_type"] == "算法预研"
+        resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={
+            "solution": "Prototype the leading candidate.", "verification": "Offline benchmark completed.",
+        }).json()
+        article = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={
+            "title": "Algorithm benchmark practice", "content": "Compare on a fixed dataset.", "reviewer": "reviewer",
+        }).json()
+        assert resolved["work_type"] == "算法预研"
+        assert article["work_type"] == "算法预研"
+        invalid = api.post("/v1/issues", json={"content": "Invalid category", "work_type": "other"})
+        assert invalid.status_code == 422
+        daily = api.post("/v1/issues", json={"content": "Routine team support", "work_type": "工作日常"})
+        assert daily.status_code == 200
+        assert daily.json()["work_type"] == "工作日常"
+
+
+def test_attachment_upload_list_and_download(tmp_path, monkeypatch):
+    objects = {}
+
+    class FakeObjectStore:
+        def put_object(self, bucket, key, stream, length, **kwargs):
+            objects[(bucket, key)] = stream.read(length)
+
+        def get_object(self, bucket, key):
+            import io
+            return io.BytesIO(objects[(bucket, key)])
+
+        def remove_object(self, bucket, key):
+            objects.pop((bucket, key), None)
+
+    with client(tmp_path, monkeypatch) as api:
+        import app.main as main
+        monkeypatch.setattr(main, "object_store", FakeObjectStore)
+        record = api.post("/v1/notes", json={"content": "Design notes"}).json()
+        uploaded = api.post(f"/v1/records/{record['id']}/attachments", files={"file": ("规划.md", b"# Plan", "text/markdown")})
+        assert uploaded.status_code == 200
+        attachment = uploaded.json()
+        assert attachment["file_name"] == "规划.md"
+        assert attachment["size_bytes"] == 6
+        detail = api.get(f"/v1/issues/{record['id']}").json()
+        assert detail["attachments"][0]["id"] == attachment["id"]
+        downloaded = api.get(f"/v1/records/{record['id']}/attachments/{attachment['id']}")
+        assert downloaded.content == b"# Plan"
+        assert "filename*=" in downloaded.headers["content-disposition"]
+
+
+def test_attachment_rejects_unsupported_and_oversized_files(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        import app.main as main
+        record = api.post("/v1/notes", json={"content": "Attachment policy"}).json()
+        unsupported = api.post(f"/v1/records/{record['id']}/attachments", files={"file": ("script.exe", b"bad", "application/octet-stream")})
+        assert unsupported.status_code == 415
+        monkeypatch.setattr(main, "ATTACHMENT_MAX_BYTES", 3)
+        oversized = api.post(f"/v1/records/{record['id']}/attachments", files={"file": ("large.txt", b"four", "text/plain")})
+        assert oversized.status_code == 413
+
+
+def test_private_notes_and_attachments_are_scoped_by_username(tmp_path, monkeypatch):
+    objects = {}
+
+    class FakeObjectStore:
+        def put_object(self, bucket, key, stream, length, **kwargs):
+            objects[(bucket, key)] = stream.read(length)
+
+        def get_object(self, bucket, key):
+            import io
+            return io.BytesIO(objects[(bucket, key)])
+
+        def remove_object(self, bucket, key):
+            objects.pop((bucket, key), None)
+
+    with client(tmp_path, monkeypatch) as api:
+        import app.main as main
+        monkeypatch.setattr(main, "object_store", FakeObjectStore)
+        alice = {"X-TeamAI-User": "Alice"}
+        bob = {"X-TeamAI-User": "Bob"}
+        private = api.post("/v1/notes", headers=alice, json={
+            "title": "Alice private", "content": "private note body", "visibility": "private",
+            "project": "teamai", "work_type": "工作日常",
+        }).json()
+        shared = api.post("/v1/notes", headers=alice, json={"content": "shared team note"}).json()
+        assert private["visibility"] == "private"
+        assert private["owner_username"] == "alice"
+        assert shared["visibility"] == "shared"
+
+        alice_rows = api.get("/v1/search", headers=alice, params={"kind": "note"}).json()
+        bob_rows = api.get("/v1/search", headers=bob, params={"kind": "note"}).json()
+        assert {row["id"] for row in alice_rows} == {private["id"], shared["id"]}
+        assert {row["id"] for row in bob_rows} == {shared["id"]}
+        assert [row["id"] for row in api.get("/v1/search", headers=alice, params={"kind": "note", "visibility": "shared"}).json()] == [shared["id"]]
+        assert [row["id"] for row in api.get("/v1/search", headers=alice, params={"kind": "note", "visibility": "private"}).json()] == [private["id"]]
+        assert api.get("/v1/search", headers=bob, params={"kind": "note", "visibility": "private"}).json() == []
+        assert api.get(f"/v1/issues/{private['id']}", headers=bob).status_code == 404
+        assert api.get(f"/v1/issues/{private['id']}", headers=alice).status_code == 200
+
+        uploaded = api.post(f"/v1/records/{private['id']}/attachments", headers=alice, files={"file": ("private.md", b"secret", "text/markdown")})
+        attachment = uploaded.json()
+        assert uploaded.status_code == 200
+        assert api.get(f"/v1/records/{private['id']}/attachments/{attachment['id']}", headers=bob).status_code == 404
+        assert api.get(f"/v1/records/{private['id']}/attachments/{attachment['id']}", headers=alice).content == b"secret"
+
+        updated = api.put(f"/v1/records/{private['id']}", headers=alice, json={
+            "expected_updated_at": private["updated_at"], "title": private["title"],
+            "content": private["content"], "project": "teamai", "work_type": "工作日常",
+            "visibility": "shared",
+        })
+        assert updated.status_code == 200
+        assert api.get("/v1/search", headers=bob, params={"kind": "note"}).json()[0]["id"] == private["id"]
+
+
+def test_private_notes_are_not_queued_for_gitlab(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITLAB_URL", "https://gitlab.example")
+    monkeypatch.setenv("GITLAB_TOKEN", "test-token")
+    monkeypatch.setenv("GITLAB_PROJECT_ID", "1")
+    with client(tmp_path, monkeypatch) as api:
+        import app.main as main
+        calls = []
+        monkeypatch.setattr(main, "sync_record", lambda record_id: calls.append(record_id) or "synced")
+        result = api.post("/v1/notes", headers={"X-TeamAI-User": "Alice"}, json={
+            "content": "do not sync this private note", "visibility": "private",
+        }).json()
+        assert result["sync_error"] is None
+        assert calls == []
 
 
 def test_redacts_credentials_and_deduplicates(tmp_path, monkeypatch):
@@ -66,6 +210,73 @@ def test_redacts_credentials_and_deduplicates(tmp_path, monkeypatch):
         second = api.post("/v1/notes", json=payload)
         assert second.status_code == 200
         assert second.json()["duplicate"] is True
+
+
+def test_record_edit_updates_content_metadata_and_preserves_system_tags(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        record = api.post("/v1/issues", json={
+            "title": "Original title", "content": "Original issue body", "project": "old-project",
+            "tech_stack": ["Python"], "tags": ["bug"],
+        }).json()
+        edited = api.put(f"/v1/records/{record['id']}", json={
+            "expected_updated_at": record["updated_at"],
+            "title": "Edited title", "content": "Edited and redacted token=edit-secret", "project": "new-project",
+            "tech_stack": ["FastAPI", "PostgreSQL"], "tags": ["urgent", "urgent"],
+        })
+        assert edited.status_code == 200
+        body = edited.json()
+        assert body["title"] == "Edited title"
+        assert "edit-secret" not in body["content"]
+        assert body["project"] == "new-project"
+        assert body["tech_stack"] == ["FastAPI", "PostgreSQL"]
+        assert body["tags"] == ["source::web", "type::issue", "urgent"]
+        assert api.get(f"/v1/issues/{record['id']}").json()["content"] == body["content"]
+        stale = api.put(f"/v1/records/{record['id']}", json={
+            "expected_updated_at": record["updated_at"], "title": "Stale edit", "content": "Must not overwrite",
+            "project": "", "tech_stack": [], "tags": [],
+        })
+        assert stale.status_code == 409
+        assert "changed since it was opened" in stale.json()["detail"]
+        assert api.get(f"/v1/issues/{record['id']}").json()["title"] == "Edited title"
+
+
+def test_record_edit_rejects_duplicates_and_protected_knowledge_states(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        first = api.post("/v1/notes", json={"title": "First", "content": "First body"}).json()
+        second = api.post("/v1/notes", json={"title": "Second", "content": "Second body"}).json()
+        duplicate = api.put(f"/v1/records/{second['id']}", json={
+            "expected_updated_at": second["updated_at"],
+            "title": first["title"], "content": first["content"], "project": "", "tech_stack": [], "tags": [],
+        })
+        assert duplicate.status_code == 409
+        assert api.get(f"/v1/issues/{second['id']}").json()["title"] == "Second"
+
+        issue = api.post("/v1/issues", json={"content": "Resolved records require verification after editing."}).json()
+        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "fix", "verification": "verified"})
+        payload = {"expected_updated_at": "not-used", "title": "Edited", "content": "Edited body", "project": "", "tech_stack": [], "tags": []}
+        assert api.put(f"/v1/records/{issue['id']}", json=payload).status_code == 409
+        article = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={"title": "Article", "content": "Curated", "reviewer": "reviewer"}).json()
+        assert api.put(f"/v1/records/{article['id']}", json=payload).status_code == 409
+
+
+def test_classifier_never_treats_solution_language_as_verification(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        suggestion = api.post("/v1/classify", json={"content": "可以尝试这个修复方案，但还没有验证"}).json()
+        assert suggestion["kind"] == "note"
+        issue = api.post("/v1/classify", json={"content": "修复后仍然报错，问题没有解决"}).json()
+        assert issue["kind"] == "issue"
+
+
+def test_unrelated_database_constraint_conflict_returns_safe_409(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        import app.main as main
+
+        assert api.post("/v1/notes", json={"title": "same title", "content": "first content"}).status_code == 200
+        with main.db() as conn:
+            conn.execute("CREATE UNIQUE INDEX test_unique_title ON records(title)")
+        conflict = api.post("/v1/notes", json={"title": "same title", "content": "different content"})
+        assert conflict.status_code == 409
+        assert conflict.json()["detail"] == "Record conflicts with an existing database constraint"
 
 
 def test_redacts_credentials_from_metadata_tags_and_resolution_source(tmp_path, monkeypatch):
@@ -87,10 +298,163 @@ def test_redacts_credentials_from_metadata_tags_and_resolution_source(tmp_path, 
         issue = api.post("/v1/issues", json={"content": "resolution source redaction check"}).json()
         resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={
             "solution": "A verified fix",
+            "verification": "Ran the integration check and it passed.",
             "source": "api_key=resolution-secret",
         }).json()
         assert "resolution-secret" not in resolved["content"]
         assert "api_key=[REDACTED]" in resolved["content"]
+
+
+def test_resolved_issue_requires_verification_and_team_approval_to_become_knowledge(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        issue = api.post("/v1/issues", json={
+            "title": "MCP handshake fails",
+            "content": "启动后首次连接失败，但重试成功。",
+            "project": "issuehub",
+            "tech_stack": [" FastAPI ", "MCP", "FastAPI"],
+            "environment": "Python 3.11",
+            "reproduction": "首次启动 MCP 客户端后立即连接",
+        }).json()
+        assert issue["project"] == "issuehub"
+        assert issue["tech_stack"] == ["FastAPI", "MCP"]
+        assert api.get("/v1/search", params={"q": "FastAPI"}).json()[0]["id"] == issue["id"]
+
+        assert api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "restart"}).status_code == 422
+        assert api.get("/v1/knowledge/candidates").json() == []
+        resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Add readiness retry", "verification": "Restarted service five times; first connection passed each time."}).json()
+        assert resolved["knowledge_status"] == "pending_review"
+        assert [row["id"] for row in api.get("/v1/knowledge/candidates").json()] == [issue["id"]]
+        assert api.get("/v1/overview").json()["pending_knowledge"] == 1
+        assert api.get("/v1/search", params={"knowledge_status": "review"}).json()[0]["id"] == issue["id"]
+        assert api.get("/v1/search", params={"kind": "knowledge"}).json() == []
+
+        article = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={
+            "title": "MCP 启动后连接重试",
+            "content": "## 适用范围\nFastAPI + MCP 服务冷启动。\n\n## 处理方式\n客户端首次连接失败时执行 readiness 重试。\n\n## 验证\n连续 5 次重启首连通过。",
+            "reviewer": "team-reviewer",
+        })
+        assert article.status_code == 200, article.text
+        knowledge = article.json()
+        assert knowledge["kind"] == "knowledge"
+        assert knowledge["parent_issue_id"] == issue["id"]
+        assert knowledge["project"] == "issuehub"
+        assert knowledge["tech_stack"] == ["FastAPI", "MCP"]
+        assert knowledge["reviewed_by"] == "team-reviewer"
+        assert api.get(f"/v1/issues/{issue['id']}").json()["knowledge_status"] == "published"
+        assert api.get(f"/v1/issues/{issue['id']}").json()["knowledge_record_id"] == knowledge["id"]
+        assert api.get("/v1/knowledge/candidates").json() == []
+        assert api.get("/v1/search", params={"kind": "knowledge"}).json()[0]["id"] == knowledge["id"]
+        assert all(row["kind"] != "knowledge" or row["knowledge_status"] == "published" for row in api.get("/v1/search").json())
+        assert api.post(f"/v1/issues/{knowledge['id']}/resolve", json={"solution": "invalid", "verification": "should be rejected"}).status_code == 409
+        assert api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={"title": "MCP 启动后连接重试", "content": "duplicate", "reviewer": "team-reviewer"}).status_code == 409
+
+
+def test_reopen_removes_pending_issue_from_knowledge_review_queue(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        issue = api.post("/v1/issues", json={"content": "candidate before reopen"}).json()
+        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "fix", "verification": "verified"})
+        assert len(api.get("/v1/knowledge/candidates").json()) == 1
+        reopened = api.post(f"/v1/issues/{issue['id']}/reopen", json={"solution": "New evidence shows regression"}).json()
+        assert reopened["knowledge_status"] == "not_applicable"
+        assert api.get("/v1/knowledge/candidates").json() == []
+
+
+def test_reopening_published_issue_hides_stale_knowledge_until_reapproved(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        issue = api.post("/v1/issues", json={"content": "Published issue becomes outdated after a regression"}).json()
+        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Apply fix v1", "verification": "Version 1 regression test passes"})
+        article = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={"title": "Fix for issue X", "content": "Steps for version 1", "reviewer": "reviewer"}).json()
+        assert api.get("/v1/search", params={"kind": "knowledge"}).json()[0]["id"] == article["id"]
+
+        reopened = api.post(f"/v1/issues/{issue['id']}/reopen", json={"solution": "Regression found in version 2"}).json()
+        assert reopened["knowledge_status"] == "needs_review"
+        assert reopened["knowledge_record_id"] == article["id"]
+        assert api.get("/v1/search", params={"kind": "knowledge"}).json() == []
+
+        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Apply fix v2", "verification": "Version 2 and 1 regression tests pass"})
+        assert len(api.get("/v1/knowledge/candidates").json()) == 1
+        revised = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={"title": "Fix for issue X", "content": "Updated steps including version 2", "reviewer": "reviewer-2"}).json()
+        assert revised["id"] == article["id"]
+        assert revised["reviewed_by"] == "reviewer-2"
+        assert revised["content"] == "Updated steps including version 2"
+
+
+def test_existing_database_migrates_project_and_knowledge_columns(tmp_path, monkeypatch):
+    database = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(database)) as conn:
+        conn.execute("CREATE TABLE records (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, source TEXT NOT NULL, author_id TEXT, session_id TEXT, title TEXT NOT NULL, content TEXT NOT NULL, tags TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'triage', external_system TEXT, external_id TEXT, external_url TEXT, sync_error TEXT, content_hash TEXT NOT NULL UNIQUE, sync_key TEXT, sync_lock_until REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        stamp = "2026-01-01T00:00:00+00:00"
+        conn.execute("INSERT INTO records (kind,source,title,content,status,content_hash,created_at,updated_at) VALUES ('issue','legacy','Resolved issue','Existing verified content','resolved','legacy-hash',?,?)", (stamp, stamp))
+        conn.commit()
+    monkeypatch.setenv("APP_DB", str(database))
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("SYNC_INTERVAL_SECONDS", "0")
+    monkeypatch.delenv("TEAMAI_API_KEY", raising=False)
+    for name in ("GITLAB_URL", "GITLAB_TOKEN", "GITLAB_PROJECT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    import app.main as main
+    importlib.reload(main)
+    with TestClient(main.app) as api:
+        migrated = api.get("/v1/issues/1").json()
+        assert migrated["project"] == ""
+        assert migrated["tech_stack"] == []
+        assert migrated["knowledge_status"] == "pending_review"
+        assert migrated["sync_key"]
+        assert migrated["visibility"] == "shared"
+        assert migrated["owner_username"] == ""
+
+
+def test_production_requires_reviewer_proxy_headers_and_approver_group(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        import app.main as main
+
+        issue = api.post("/v1/issues", json={"content": "production approval gate"}).json()
+        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "apply fix", "verification": "verified"})
+        monkeypatch.setenv("APP_ENV", "production")
+        monkeypatch.setenv("TEAMAI_REVIEWER_ID_HEADER", "X-Authenticated-User")
+        monkeypatch.setenv("TEAMAI_REVIEWER_GROUPS_HEADER", "X-Authenticated-Groups")
+        monkeypatch.setenv("TEAMAI_REVIEWER_REQUIRED_GROUP", "teamai-approvers")
+
+        payload = {"title": "Reviewed fix", "content": "Article", "reviewer": "spoofed-form-name"}
+        assert api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json=payload).status_code == 403
+        headers = {"X-Authenticated-User": "reviewer@example.test", "X-Authenticated-Groups": "developers, teamai-approvers"}
+        published = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json=payload, headers=headers)
+        assert published.status_code == 200
+        assert published.json()["reviewed_by"] == "reviewer@example.test"
+
+
+def test_production_config_requires_proxy_review_identity_and_group(monkeypatch):
+    import app.main as main
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setattr(main, "DATABASE_URL", "")
+    with pytest.raises(RuntimeError, match="DATABASE_URL.*PostgreSQL"):
+        main.validate_config()
+    monkeypatch.setattr(main, "DATABASE_URL", "postgresql://teamai:test@localhost/teamai")
+    monkeypatch.setenv("TEAMAI_API_KEY", "a-long-production-api-key-0123456789")
+    monkeypatch.delenv("TEAMAI_REVIEWER_ID_HEADER", raising=False)
+    monkeypatch.delenv("TEAMAI_REVIEWER_GROUPS_HEADER", raising=False)
+    monkeypatch.delenv("TEAMAI_REVIEWER_REQUIRED_GROUP", raising=False)
+    with pytest.raises(RuntimeError, match="TEAMAI_REVIEWER_ID_HEADER"):
+        main.validate_config()
+
+    monkeypatch.setenv("TEAMAI_REVIEWER_ID_HEADER", "X-Authenticated-User")
+    monkeypatch.setenv("TEAMAI_REVIEWER_GROUPS_HEADER", "X-Authenticated-Groups")
+    with pytest.raises(RuntimeError, match="TEAMAI_REVIEWER_REQUIRED_GROUP"):
+        main.validate_config()
+
+    monkeypatch.setenv("TEAMAI_REVIEWER_REQUIRED_GROUP", "teamai-approvers")
+    main.validate_config()
+
+
+def test_postgres_url_validation_rejects_malformed_urls(monkeypatch):
+    import app.main as main
+
+    monkeypatch.setenv("APP_ENV", "development")
+    for url in ("mysql://localhost/teamai", "postgresql://localhost:invalid/teamai", "postgresql://[broken/teamai"):
+        monkeypatch.setattr(main, "DATABASE_URL", url)
+        with pytest.raises(RuntimeError, match="DATABASE_URL"):
+            main.validate_config()
 
 
 def test_api_key_guard(tmp_path, monkeypatch):
@@ -142,6 +506,7 @@ def test_startup_rejects_partial_gitlab_and_short_production_key(tmp_path, monke
     monkeypatch.delenv("GITLAB_URL", raising=False)
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("TEAMAI_API_KEY", "too-short")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://teamai:test@localhost/teamai")
     importlib.reload(main)
     with pytest.raises(RuntimeError, match="at least 32 characters"):
         with TestClient(main.app):
@@ -403,6 +768,25 @@ def test_malformed_gitlab_response_keeps_local_record_and_safe_error(tmp_path, m
         assert "invalid issue response" in record["sync_error"]
         assert "never-store-this-token" not in record["sync_error"]
         assert api.get(f"/v1/issues/{record['id']}").status_code == 200
+
+
+def test_gitlab_exception_does_not_persist_url_or_raw_exception_details(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        import app.main as main
+
+        monkeypatch.setenv("GITLAB_URL", "https://gitlab.example")
+        monkeypatch.setenv("GITLAB_TOKEN", "secret-token")
+        monkeypatch.setenv("GITLAB_PROJECT_ID", "group/project")
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("https://gitlab.example/private?token=secret-token internal proxy trace")
+
+        monkeypatch.setattr(main, "gitlab_request", fail)
+        created = api.post("/v1/issues", json={"content": "redact synchronization failure"}).json()
+        assert created["sync_error"]
+        assert "https://" not in created["sync_error"]
+        assert "secret-token" not in created["sync_error"]
+        assert "internal proxy trace" not in created["sync_error"]
 
 
 def test_gitlab_create_retry_reconciles_issue_after_lost_response(tmp_path, monkeypatch):

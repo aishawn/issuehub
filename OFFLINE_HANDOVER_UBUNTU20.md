@@ -1,8 +1,10 @@
-# TeamAI + GitLab 内网离线部署交接文档
+# TeamAI + GitLab 内网离线部署交接文档（旧版 SQLite 方案）
 
 适用环境：Ubuntu 20.04 LTS，x86_64，服务器不能访问外网。
 
 > 建议：Ubuntu 20.04 已较旧。GitLab 版本必须选择仍支持 Ubuntu 20.04 的固定版本；如果可以新建系统，优先使用 Ubuntu 22.04/24.04。
+
+> **状态：TeamAI 部分已过期，不能作为当前生产部署步骤。** 本文旧方案通过 Python/systemd 使用 SQLite；当前生产模式要求 PostgreSQL，推荐按 [PRODUCTION.md](PRODUCTION.md) 使用 Docker Compose。下方 GitLab CE 离线安装准备仍可参考；不要照搬本文的 TeamAI `.env`、启动或 SQLite 备份步骤用于团队生产库。当前 PostgreSQL 离线镜像导入和备份恢复应按目标环境验证后再执行。
 
 ## 一、联网准备机下载
 
@@ -136,7 +138,7 @@ curl http://127.0.0.1:8787/health
 - 追加解决方案后，GitLab Issue 描述更新。
 - 标记解决后，GitLab Issue 关闭。
 - `.env` 和 Token 不提交到 Git。
-- 配置 SQLite 数据库定期备份。
+- 当前生产使用 PostgreSQL；按 `PRODUCTION.md` 配置 `pg_dump` 定期备份并进行异机恢复演练。本文旧 SQLite 备份步骤不适用。
 - 正式开放前通过 Nginx 或公司统一认证保护 TeamAI；当前应用没有内置登录。
 
 ## 五、交接信息

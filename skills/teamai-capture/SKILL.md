@@ -1,20 +1,36 @@
 ---
 name: teamai-capture
-description: Capture a concise team note, issue, or verified solution in TeamAI Issue Hub through MCP.
+description: Search and capture team issues, then curate verified knowledge for explicit human review in TeamAI Issue Hub through MCP.
 ---
 
 # TeamAI Capture
 
-Use this skill only when the user explicitly asks to save, capture, record, search, append a solution, or resolve a TeamAI item.
+Use this skill when the user asks to save, capture, record, search, append a solution, resolve an issue, or promote a verified result into shared team knowledge.
 
 ## Capture workflow
 
-1. Decide whether the content is a `note`, `issue`, or `solution`.
-2. Remove API keys, tokens, passwords, cookies, and private credentials from the payload.
-3. Search TeamAI for a likely duplicate when the content describes a problem.
-4. Show a short preview containing title, type, tags, and the redacted body.
-5. After confirmation, call `teamai_create_note` or `teamai_create_issue`.
-6. Return the local record id and GitLab URL when available.
+1. Search TeamAI for existing team knowledge first (`teamai_search` with `kind: "knowledge"`), then search related issues and notes if needed. Page through results with `limit` and `offset` when a result page is full. Reuse a relevant result instead of creating a duplicate.
+2. For a quick `note` (随手记), identify the username used by Issue Hub. If the user already supplied it in this conversation, reuse it; otherwise ask before the first note and retain it for later notes in the same conversation. Do not infer a username from an email, machine username, Git identity, or unrelated profile. The Web UI also remembers the entered username in that browser and allows switching it.
+3. Every new note must have an **所属项目**, an **所属工作类型**, and a visibility choice. Ask for missing values before creating the record. Reuse project/type values stated for this note; never guess. Offer `算法调研`, `算法预研`, `模型部署`, `组件开发`, `项目支撑`, `工作日常`; use one of these supported types. If project is unknown, ask the user to provide it. Ask whether the note should be `shared` (team shared) or `private` (personal view); shared is the default if the user has no preference, but make the choice visible in the capture preview.
+4. Classify the new information as a quick `note`, an unresolved `issue`, or a verified experience. An unverified suggestion is never a solution or reusable knowledge.
+5. Capture technology stack when known. For issues, include environment, reproduction steps, expected/actual result, attempted fixes, root cause, and verification evidence where available. Leave unknown facts blank; never invent them.
+6. Remove API keys, tokens, passwords, cookies, and private credentials from the payload.
+7. Personal view is weak username-based separation, not authentication. Anyone can claim another username. Tell users not to store sensitive/private material there. Personal notes are excluded from GitLab sync and team knowledge review. Only explicitly shared notes can enter team-wide search.
+8. When the user explicitly asks to save or capture something, create the note/issue after the search and required note fields are available, without asking them to approve the same capture again. If their intent to save is unclear, show a concise preview and ask first. Never publish a reusable knowledge article without the separate explicit approval described below.
+9. Return the TeamAI record id, visibility, and GitLab URL when available.
+
+## Note identity and classification
+
+- Pass the user-selected username as the capture context (`username` / `X-TeamAI-User`) and as the owner of the note. This username is not verified identity and must never be presented as secure authentication.
+- Include `所属项目：<project>` and `所属工作类型：<one selected value>` in note metadata/body when using a client that cannot persist those as first-class fields. When the API exposes `project` and `work_type`, populate those fields instead of relying only on body text.
+- Ask one concise bundled follow-up for the account (first note only), project, and work type when several are missing. A user can answer with the project and type while omitting account only if the account was already established or they explicitly decline it.
+
+## Attachments
+
+- If the user provides a PPT/PPTX, HTML, Markdown, PDF, Office document, text file, or image that belongs with a note or issue, create/search for the record first, then upload the file through the TeamAI Web detail page or `POST /v1/records/{id}/attachments` using multipart form field `file`.
+- The API returns attachment metadata; list attachments by calling `teamai_get_issue` (the response includes `attachments`) or `teamai_list_attachments`. Downloads use `/v1/records/{id}/attachments/{attachment_id}` with the matching `X-TeamAI-User` context for personal notes. Username context is not identity verification.
+- Mention each attached filename in the record body when useful. Never upload credentials, secrets, or files the user did not ask to preserve.
+- Current upload limit is 20 MiB per file, 30 files per record. Supported extensions are PDF, PPT/PPTX, DOC/DOCX, XLS/XLSX, MD, TXT, HTML, and PNG/JPG/GIF/WebP.
 
 ## Problem format
 
@@ -32,4 +48,13 @@ Use this structure for issues:
 ## 验证结果
 ```
 
-Use `teamai_append_solution` for an intermediate finding and `teamai_resolve` only after the solution has been verified.
+Use `teamai_append_solution` for an intermediate finding. A verified experience should be attached to its source issue; use `teamai_resolve` only after the reporter says the fix was verified, and include how it was verified. If there is no existing issue, create one with the known context, then resolve it with the verification evidence so it enters the review queue.
+
+## Promote a resolved issue into team knowledge
+
+- Resolving an issue only puts it into the knowledge review queue. It does not publish it as reusable team knowledge.
+- Suggest promotion only when the cause and fix are repeatable, useful beyond one person/session, and supported by verification evidence.
+- Draft a standalone knowledge article with symptoms, scope/project, stack/version, cause, fix, validation, and caveats. Keep credentials and unrelated private context out.
+- Show the proposed title and full article, identify the source issue, and obtain explicit human approval before calling `teamai_publish_knowledge`.
+- Never approve on behalf of the user, infer approval from “resolve this”, or publish automatically. If there is no approval, leave the issue in the pending review queue.
+- In local development, provide the reviewer audit label. In production, the API requires a trusted proxy identity in the configured approver group. If MCP lacks that identity and publication is denied, direct the user to the authenticated Web review panel; never retry through an untrusted/shared identity.

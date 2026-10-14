@@ -79,19 +79,54 @@ def run_smoke(screenshots_dir: Path | None = None) -> dict[str, object]:
                         response = page.goto(base_url, wait_until="networkidle")
                         check(bool(response and response.status == 200), "home page returns HTTP 200")
                         check(page.title() == "TeamAI Issue Hub", "page title is present")
+                        page.locator("#username-input").fill("browser-smoke-user")
+                        page.locator("#user-login-form button[type='submit']").click()
+                        page.locator("#user-login").wait_for(state="hidden")
+                        check(page.locator(".nav-item").count() == 3, "main navigation only shows overview, issues, and notes")
+                        page.locator("[data-page='issues']").click()
 
+                        page.locator("#top-new-record").click()
+                        page.locator("[data-kind='note']").click()
+                        page.locator("#title").fill("Browser smoke: personal note")
+                        page.locator("#content").fill("Personal note visibility check")
+                        page.locator("#project").fill("browser-smoke")
+                        page.locator("#work-type").select_option(label="工作日常")
+                        page.locator("#note-visibility").select_option("private")
+                        page.locator("#submit").click()
+                        personal_note = page.locator("#notes-results .record").filter(has_text="Browser smoke: personal note")
+                        personal_note.wait_for(timeout=5000)
+                        page.locator("#user-switch").click()
+                        page.locator("#username-input").fill("browser-smoke-other")
+                        page.locator("#user-login-form button[type='submit']").click()
+                        personal_note.wait_for(state="detached", timeout=5000)
+                        page.locator("#user-switch").click()
+                        page.locator("#username-input").fill("browser-smoke-user")
+                        page.locator("#user-login-form button[type='submit']").click()
+                        page.locator("#notes-results .record").filter(has_text="Browser smoke: personal note").wait_for(timeout=5000)
+                        page.locator("[data-page='issues']").click()
+
+                        page.locator("#top-new-record").click()
+                        page.locator("[data-kind='issue']").click()
                         page.locator("#content").fill("Browser smoke: MCP configuration failed to load")
-                        page.locator('[data-kind="issue"]').click()
+                        page.locator("#work-type").select_option(label="模型部署")
                         page.locator("#submit").click()
                         page.get_by_text("已保存，记录已进入团队库。", exact=True).wait_for(timeout=5000)
 
-                        record = page.locator(".record").first
+                        record = page.locator("#results .issue-row").filter(has_text="Browser smoke: MCP configuration failed to load")
                         record.wait_for()
                         record.click()
                         page.locator("#detail").wait_for(state="visible")
                         check(page.evaluate("document.activeElement.id") == "detail-title", "opening detail focuses its heading")
 
+                        page.locator("#edit-record").click()
+                        page.locator("#edit-title").fill("Browser smoke: editable issue")
+                        page.locator("#edit-content").fill("Browser smoke: MCP configuration failed to load")
+                        page.locator("#save-edit").click()
+                        page.locator("#detail-title").get_by_text("Browser smoke: editable issue").wait_for(timeout=5000)
+                        check(page.locator("#detail-content").inner_text() == "Browser smoke: MCP configuration failed to load", "record edits persist through the management UI")
+
                         page.locator("#solution-input").fill("补充环境变量并重启服务")
+                        page.locator("#verification-input").fill("重复启动服务三次，每次首次 MCP 请求均成功")
                         page.locator("#resolve-issue").click()
                         page.locator("#reopen-issue").wait_for(state="visible", timeout=5000)
                         page.locator("#solution-input").fill("回归验证发现问题仍存在")
@@ -99,11 +134,17 @@ def run_smoke(screenshots_dir: Path | None = None) -> dict[str, object]:
                         page.locator("#detail-meta").get_by_text("待处理", exact=True).wait_for(timeout=5000)
                         page.keyboard.press("Escape")
                         page.locator("#detail").wait_for(state="hidden")
-                        check(page.evaluate("document.activeElement.classList.contains('record')"), "closing updated detail returns focus to the record")
+                        check(page.evaluate("document.activeElement.classList.contains('issue-row')"), "closing updated detail returns focus to the record")
+
+                        source_issue = page.locator("#results .issue-row").filter(has_text="Browser smoke: editable issue").first
+                        source_issue.click()
+                        page.locator("#detail").wait_for(state="visible")
+                        page.keyboard.press("Escape")
+                        page.locator("#detail").wait_for(state="hidden")
 
                         # Hold a list refresh in flight, close the detail panel,
                         # then ensure replacing the focused record preserves focus.
-                        page.locator(".record").first.click()
+                        page.locator("#results .issue-row").first.click()
                         page.locator("#detail").wait_for(state="visible")
                         page.evaluate("""() => {
                           const originalFetch = window.fetch.bind(window);
@@ -117,13 +158,14 @@ def run_smoke(screenshots_dir: Path | None = None) -> dict[str, object]:
                             return response;
                           });
                         }""")
+                        page.locator("#results .issue-row").first.focus()
                         with page.expect_console_message(lambda message: message.text == "__teamai_search_held__", timeout=5000):
-                            page.locator('[data-filter-status="triage"]').click()
+                            page.evaluate("() => { loadRecords(); }")
                         page.keyboard.press("Escape")
                         page.locator("#detail").wait_for(state="hidden")
                         page.evaluate("window.__releaseSearch()")
                         page.locator('#results[aria-busy="false"]').wait_for(timeout=5000)
-                        page.locator(".record:focus").wait_for(timeout=5000)
+                        page.locator("#results .issue-row:focus").wait_for(timeout=5000)
                         check(True, "list refresh preserves focus after closing detail")
                         check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "desktop viewport has no horizontal overflow")
 

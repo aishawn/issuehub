@@ -1,13 +1,320 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f7f7f8"><title>TeamAI Issue Hub</title><link rel="icon" href="/web/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/web/styles.css"></head>
-<body>
-<header class="topbar"><div class="brand"><span class="brand-mark">T</span><span>TeamAI <b>Issue Hub</b></span></div><div class="topbar-meta"><span class="status-dot"></span><span id="health">本地模式</span></div></header>
-<main class="shell"><section class="intro"><div><p class="eyebrow">TEAM KNOWLEDGE INBOX</p><h1>把问题留下，把答案找回来。</h1><p class="lede">用一条低摩擦的入口，收集 Claude Code、Qwen Code 和团队开发中的真实问题。</p></div><div class="shortcut"><span>快速记录</span><kbd>Ctrl</kbd><kbd>Enter</kbd></div></section>
-<section class="overview"><div class="overview-title"><p class="eyebrow">OVERVIEW</p><h2>问题总览</h2><span id="overview-updated">刚刚更新</span></div><div class="metrics"><button class="metric active" data-filter-status="" aria-pressed="true"><span>全部记录</span><strong id="metric-total">0</strong></button><button class="metric" data-filter-status="triage" aria-pressed="false"><span>待处理</span><strong id="metric-triage">0</strong></button><button class="metric" data-filter-status="in-progress" aria-pressed="false"><span>处理中</span><strong id="metric-progress">0</strong></button><button class="metric" data-filter-status="resolved" aria-pressed="false"><span>已解决</span><strong id="metric-resolved">0</strong></button><div class="metric plain"><span>近 7 天新增</span><strong id="metric-recent">0</strong></div></div></section>
-<section class="workspace"><div class="capture-panel panel"><div class="panel-head"><div><p class="eyebrow">CAPTURE</p><h2>新建记录</h2></div><div class="segmented" role="group" aria-label="记录类型"><button class="active" type="button" data-kind="note" aria-pressed="true">随笔</button><button type="button" data-kind="issue" aria-pressed="false">问题</button><button type="button" data-kind="solution" aria-pressed="false">方案</button></div></div>
-<label for="title">标题 <span>可选</span></label><input id="title" maxlength="180" placeholder="一句话说明这条记录"><label for="content">内容 <span>必填</span></label><textarea id="content" rows="8" maxlength="100000" placeholder="记录现象、上下文、尝试过什么，或者直接粘贴对话中的关键片段…"></textarea>
-<div class="two-col"><div><label for="source">来源</label><select id="source"><option value="web">Web</option><option value="claude-code">Claude Code</option><option value="qwen-code">Qwen Code</option><option value="teamai-cli">teamai-cli</option></select></div><div><label for="tags">标签 <span>逗号分隔</span></label><input id="tags" maxlength="2429" placeholder="docker, mcp, typescript"></div></div>
-<div class="form-foot"><p id="form-message" class="form-message" role="status" aria-live="polite">创建前会自动脱敏凭证并检查重复内容。</p><button id="submit" class="primary" type="button">保存记录 <span aria-hidden="true">↗</span></button></div></div>
-<aside class="side-panel"><div class="panel search-panel"><div class="panel-head"><div><p class="eyebrow">LIBRARY</p><h2>记录库</h2></div><div class="library-actions"><button id="sync-retry" class="secondary sync-retry" type="button" hidden>重试同步</button><span id="count" class="count" aria-live="polite">0 条</span></div></div><div class="search-box"><label class="visually-hidden" for="search">搜索记录</label><span aria-hidden="true">⌕</span><input id="search" type="search" maxlength="200" placeholder="搜索问题、方案、标签"></div><div class="filters"><label class="visually-hidden" for="kind-filter">记录类型</label><select id="kind-filter"><option value="">全部类型</option><option value="issue">问题</option><option value="note">随笔</option><option value="solution">方案</option></select><label class="visually-hidden" for="source-filter">记录来源</label><select id="source-filter"><option value="">全部来源</option><option value="claude-code">Claude Code</option><option value="qwen-code">Qwen Code</option><option value="teamai-cli">teamai-cli</option><option value="web">Web</option></select></div><div id="results" class="results" aria-live="polite" aria-busy="false"><div class="empty">正在加载记录…</div></div></div><div class="panel tips"><p class="eyebrow">WORKFLOW</p><h3>推荐记录格式</h3><ul><li><b>现象</b> 发生了什么</li><li><b>环境</b> 项目、版本、工具</li><li><b>方案</b> 如何修复与验证</li></ul></div></aside></section><section id="detail" class="detail panel hidden" aria-labelledby="detail-title"><div class="detail-head"><div><p class="eyebrow">RECORD DETAIL</p><h2 id="detail-title" tabindex="-1">记录详情</h2><div id="detail-meta" class="record-meta"></div></div><button id="close-detail" class="ghost" type="button" aria-label="关闭详情">×</button></div><pre id="detail-content"></pre><div class="detail-actions"><label class="visually-hidden" for="solution-input">解决方案或重新打开原因</label><textarea id="solution-input" rows="3" maxlength="50000" placeholder="追加解决方案、验证结果或重新打开原因…"></textarea><div><button id="append-solution" class="secondary" type="button">追加方案</button><button id="reopen-issue" class="secondary" type="button" hidden>重新打开</button><button id="resolve-issue" class="primary" type="button">标记已解决</button></div></div></section></main><script src="/web/sync-retry.js" defer></script><script src="/web/detail-focus.js" defer></script><script src="/web/safe-external-url.js" defer></script><script src="/web/load-more.js" defer></script><script src="/web/request-errors.js" defer></script><script src="/web/app.js" defer></script>
-</body></html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#2563eb">
+  <title>TeamAI Issue Hub</title>
+  <link rel="icon" href="/web/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/web/styles.css">
+</head>
+<body class="admin-app">
+  <section id="user-login" class="user-login hidden" role="dialog" aria-modal="true" aria-labelledby="user-login-title">
+    <form id="user-login-form" class="user-login-card">
+      <h2 id="user-login-title">进入 TeamAI</h2>
+      <p>输入用户名即可查看团队共享记录与个人视图。用户名免密、不验证身份，请勿在个人视图保存敏感内容。</p>
+      <label for="username-input">用户名</label>
+      <input id="username-input" maxlength="80" autocomplete="username" required>
+      <button class="primary full-width" type="submit">继续</button>
+    </form>
+  </section>
+
+  <aside class="app-sidebar" aria-label="主导航">
+    <a class="brand" href="#overview">
+      <span class="brand-mark">T</span>
+      <span>TeamAI <b>Issue Hub</b></span>
+    </a>
+    <p class="nav-caption">工作区</p>
+    <nav class="main-nav">
+      <button class="nav-item active" data-page="overview" type="button">
+        <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+        总览
+      </button>
+      <button class="nav-item" data-page="issues" type="button">
+        <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>
+        问题 <span class="nav-count" id="nav-issues">0</span>
+      </button>
+      <button class="nav-item" data-page="notes" type="button">
+        <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
+        随手记
+      </button>
+    </nav>
+    <div class="sidebar-bottom"><span class="status-dot"></span><span id="health">正在连接…</span></div>
+  </aside>
+
+  <main class="app-main">
+    <header class="page-topbar">
+      <div>
+        <span class="eyebrow">工作区</span>
+        <h1 id="page-title">总览</h1>
+      </div>
+      <div class="top-actions">
+        <button id="user-switch" class="secondary" type="button" title="切换用户名">用户名：未登录</button>
+        <label class="global-search">
+          <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
+          <span id="search-context" class="visually-hidden">搜索问题</span>
+          <input id="search" type="search" maxlength="200" placeholder="搜索问题…">
+        </label>
+        <button id="top-new-record" class="primary" type="button"><span class="btn-plus" aria-hidden="true">＋</span><span class="btn-label">新建记录</span></button>
+      </div>
+    </header>
+
+    <div id="form-message" class="form-message toast" role="status" aria-live="polite"></div>
+
+    <section class="page-view" data-view="overview">
+      <div class="welcome-row">
+        <p class="lede-inline">查看问题进展，记录团队经验。</p>
+        <span id="overview-updated" class="muted">刚刚更新</span>
+      </div>
+      <div class="metrics">
+        <button class="metric active" data-filter-status="" aria-pressed="true"><span>全部问题</span><strong id="metric-total">0</strong></button>
+        <button class="metric" data-filter-status="triage" aria-pressed="false"><span>待处理</span><strong id="metric-triage">0</strong></button>
+        <button class="metric" data-filter-status="in-progress" aria-pressed="false"><span>处理中</span><strong id="metric-progress">0</strong></button>
+        <button class="metric" data-filter-status="resolved" aria-pressed="false"><span>已解决</span><strong id="metric-resolved">0</strong></button>
+        <div class="metric plain"><span>近 7 天新增</span><strong id="metric-recent">0</strong></div>
+      </div>
+      <div class="overview-grid">
+        <section class="panel overview-list">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">最近更新</p>
+              <h2>最近更新的问题</h2>
+            </div>
+            <button class="text-button" data-go-page="issues" type="button">查看全部 →</button>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr><th>问题</th><th>所属项目</th><th>所属类型</th><th>状态</th><th>最近更新</th></tr>
+              </thead>
+              <tbody id="overview-rows"></tbody>
+            </table>
+          </div>
+          <div id="overview-empty" class="empty hidden">
+            暂无问题记录
+            <button class="primary empty-action" type="button" data-new-issue>新建第一条问题</button>
+          </div>
+        </section>
+        <aside class="panel overview-actions" aria-label="快捷操作">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">快捷入口</p>
+              <h2>常用操作</h2>
+            </div>
+          </div>
+          <div class="quick-actions">
+            <button class="quick-action" type="button" data-new-issue>
+              <span class="quick-action-title">新建问题</span>
+              <span class="quick-action-desc">记录现象与处理过程</span>
+            </button>
+            <button class="quick-action" type="button" data-new-note>
+              <span class="quick-action-title">新建随手记</span>
+              <span class="quick-action-desc">记下想法、资料或待办</span>
+            </button>
+            <button class="quick-action" type="button" data-go-triage>
+              <span class="quick-action-title">看待处理</span>
+              <span class="quick-action-desc">跳到待处理问题队列</span>
+            </button>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="page-view hidden" data-view="notes">
+      <div class="notes-intro">
+        <div>
+          <h2>团队与个人记录</h2>
+          <p>集中查找你有权查看的随手记。</p>
+        </div>
+      </div>
+      <details class="notes-safety">
+        <summary><span aria-hidden="true">i</span>个人视图为弱隔离，勿存敏感资料</summary>
+        <p>个人视图仅按用户名区分，用户名不验证身份，知道用户名的人可以冒用。请勿保存敏感资料。</p>
+      </details>
+      <div class="notes-toolbar">
+        <div id="note-visibility-filter" class="view-switch" role="group" aria-label="随手记可见范围">
+          <button class="selected" type="button" data-note-filter="" aria-pressed="true">全部可见</button>
+          <button type="button" data-note-filter="shared" aria-pressed="false">团队共享</button>
+          <button type="button" data-note-filter="private" aria-pressed="false">我的个人视图</button>
+        </div>
+        <span id="notes-count" class="count">0 条</span>
+      </div>
+      <div id="notes-results" class="panel records-panel notes-records" aria-live="polite" aria-busy="false">
+        <div class="empty">正在加载…</div>
+      </div>
+    </section>
+
+    <section class="page-view hidden" data-view="issues">
+      <div class="section-head issues-toolbar">
+        <div>
+          <p class="eyebrow">问题队列</p>
+          <h2>问题列表</h2>
+        </div>
+        <div class="issues-controls">
+          <label>
+            <span class="visually-hidden">问题状态</span>
+            <select id="status-filter">
+              <option value="">所有状态</option>
+              <option value="triage">待处理</option>
+              <option value="in-progress">处理中</option>
+              <option value="resolved">已解决</option>
+            </select>
+          </label>
+          <div class="view-switch" role="group" aria-label="问题显示方式">
+            <button class="selected" data-layout="table" type="button">列表</button>
+            <button data-layout="board" type="button">看板</button>
+          </div>
+          <span id="count" class="count">0 条</span>
+        </div>
+      </div>
+      <div id="results" class="panel records-panel" aria-live="polite" aria-busy="false">
+        <div class="empty">正在加载…</div>
+      </div>
+    </section>
+
+    <section id="capture" class="capture-dialog hidden" role="dialog" aria-modal="true" aria-labelledby="capture-title">
+      <div class="dialog-backdrop" data-close-capture></div>
+      <div class="capture-panel panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">新建记录</p>
+            <h2 id="capture-title">新建问题</h2>
+          </div>
+          <button id="close-capture" class="ghost" type="button" aria-label="关闭新建记录">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="segmented" role="group" aria-label="记录类型">
+          <button class="active" type="button" data-kind="issue" aria-pressed="true">问题</button>
+          <button type="button" data-kind="note" aria-pressed="false">随手记</button>
+        </div>
+        <label for="title">标题 <span>可选</span></label>
+        <input id="title" maxlength="180" placeholder="一句话说明这条记录">
+        <label for="content">内容 <span>必填</span></label>
+        <textarea id="content" rows="7" maxlength="100000" placeholder="记录问题现象、处理过程或可复用经验…"></textarea>
+        <div class="two-col">
+          <div>
+            <label for="project">所属项目</label>
+            <input id="project" maxlength="180" placeholder="例如：issuehub">
+          </div>
+          <div>
+            <label for="work-type">所属类型 <span>必选</span></label>
+            <select id="work-type" required>
+              <option value="">请选择所属类型</option>
+              <option>算法调研</option>
+              <option>算法预研</option>
+              <option>模型部署</option>
+              <option>组件开发</option>
+              <option>项目支撑</option>
+              <option>工作日常</option>
+            </select>
+          </div>
+        </div>
+        <div id="note-visibility-row" class="hidden">
+          <label for="note-visibility">可见范围</label>
+          <select id="note-visibility">
+            <option value="shared">团队共享</option>
+            <option value="private">个人视图（用户名区分，非安全隔离）</option>
+          </select>
+          <p class="review-hint">个人视图按用户名区分，不适合保存敏感内容。</p>
+        </div>
+        <div class="form-foot">
+          <p class="review-hint">保存前自动脱敏凭证并检查重复内容。</p>
+          <button id="submit" class="primary" type="button">保存</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="detail" class="detail panel hidden" aria-labelledby="detail-title">
+      <div class="detail-head">
+        <div>
+          <p class="eyebrow">记录详情</p>
+          <h2 id="detail-title" tabindex="-1">记录详情</h2>
+          <div id="detail-meta" class="record-meta"></div>
+        </div>
+        <div class="detail-head-actions">
+          <button id="edit-record" class="secondary" type="button" hidden>编辑记录</button>
+          <button id="close-detail" class="ghost" type="button" aria-label="关闭详情">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="detail-content" class="detail-content" tabindex="0"></div>
+      <section class="attachments-panel">
+        <div class="section-head">
+          <div>
+            <h3>附件</h3>
+          </div>
+          <label class="secondary attachment-upload">添加附件<input id="attachment-input" type="file" accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.md,.txt,.html,.htm,.png,.jpg,.jpeg,.gif,.webp"></label>
+        </div>
+        <p class="review-hint">单个文件最大 20 MB；支持 PDF、Office、Markdown、HTML、文本和常见图片。</p>
+        <ul id="attachment-list" class="attachment-list"></ul>
+      </section>
+      <section id="record-editor" class="record-editor hidden" aria-label="编辑记录">
+        <label for="edit-title">标题</label>
+        <input id="edit-title" maxlength="180">
+        <label for="edit-content">正文</label>
+        <textarea id="edit-content" rows="8" maxlength="100000"></textarea>
+        <div class="two-col">
+          <div>
+            <label for="edit-project">所属项目</label>
+            <input id="edit-project" maxlength="180">
+          </div>
+          <div>
+            <label for="edit-work-type">所属类型</label>
+            <select id="edit-work-type" required>
+              <option value="">请选择所属类型</option>
+              <option>算法调研</option>
+              <option>算法预研</option>
+              <option>模型部署</option>
+              <option>组件开发</option>
+              <option>项目支撑</option>
+              <option>工作日常</option>
+            </select>
+          </div>
+        </div>
+        <div id="edit-visibility-row">
+          <label for="edit-visibility">可见范围</label>
+          <select id="edit-visibility">
+            <option value="shared">团队共享</option>
+            <option value="private">个人视图（用户名区分，非安全隔离）</option>
+          </select>
+        </div>
+        <div class="editor-actions">
+          <button id="cancel-edit" class="secondary" type="button">取消</button>
+          <button id="save-edit" class="primary" type="button">保存修改</button>
+        </div>
+      </section>
+      <section class="activity-panel">
+        <div class="section-head">
+          <div>
+            <h3>活动记录</h3>
+          </div>
+        </div>
+        <ol id="activity-list" class="activity-list"></ol>
+      </section>
+      <div id="issue-actions" class="detail-actions">
+        <label for="solution-input">处理结论 / 重新打开原因</label>
+        <textarea id="solution-input" rows="3" maxlength="50000" placeholder="记录处理结论，或填写重新打开原因…"></textarea>
+        <label for="verification-input">验证证据 <span>标记已解决时必填</span></label>
+        <textarea id="verification-input" rows="3" maxlength="20000" placeholder="记录验证方法和结果…"></textarea>
+        <div>
+          <button id="append-solution" class="secondary" type="button">追加处理进展</button>
+          <button id="reopen-issue" class="secondary" type="button" hidden>重新打开</button>
+          <button id="resolve-issue" class="primary" type="button">标记已解决</button>
+        </div>
+      </div>
+    </section>
+    <button id="detail-backdrop" class="detail-backdrop hidden" type="button" aria-label="关闭记录详情"></button>
+  </main>
+
+  <script src="/web/detail-focus.js" defer></script>
+  <script src="/web/safe-external-url.js" defer></script>
+  <script src="/web/load-more.js" defer></script>
+  <script src="/web/request-errors.js" defer></script>
+  <script src="/web/app.js" defer></script>
+</body>
+</html>

@@ -18,7 +18,23 @@ python-checks:
     - python -m pip install --disable-pip-version-check -r requirements-dev.txt
   script:
     - python -m pytest -q
-    - python -m py_compile app/main.py teamai_cli.py mcp_server.py teamai_backup.py teamai_transport.py
+    - python -m py_compile app/main.py teamai_cli.py mcp_server.py teamai_backup.py teamai_migrate.py teamai_transport.py teamai_postgres_backup.py teamai_postgres_restore.py
+
+postgres-integration:
+  stage: verify
+  image: python:3.13-slim
+  services:
+    - name: postgres:17-alpine
+      alias: postgres
+  variables:
+    POSTGRES_DB: teamai_test
+    POSTGRES_USER: teamai_test
+    POSTGRES_PASSWORD: teamai-test-password
+    TEST_DATABASE_URL: postgresql://teamai_test:teamai-test-password@postgres:5432/teamai_test
+  before_script:
+    - python -m pip install --disable-pip-version-check -r requirements-dev.txt
+  script:
+    - python -m pytest -q
 
 frontend-syntax:
   stage: verify

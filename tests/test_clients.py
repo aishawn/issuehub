@@ -187,8 +187,61 @@ def test_cli_and_mcp_never_echo_api_url_credentials(monkeypatch, capsys):
     assert "Invalid TEAMAI_API" in error
 
 
+def test_mcp_hides_unexpected_internal_exception_details(monkeypatch, capsys):
+    import mcp_server
+
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}) + "\n"),
+    )
+
+    def fail(_message):
+        raise RuntimeError("private database path C:/secret/teamai.db")
+
+    monkeypatch.setattr(mcp_server, "handle", fail)
+    mcp_server.main()
+    response = json.loads(capsys.readouterr().out)
+    assert response["error"]["message"] == "TeamAI MCP request failed"
+    assert "C:/secret" not in response["error"]["message"]
+
+
+def test_mcp_search_exposes_type_filters_and_pagination(monkeypatch):
+    import mcp_server
+
+    captured = []
+    monkeypatch.setattr(mcp_server, "call", lambda method, path: captured.append((method, path)) or [])
+    response = mcp_server.handle({
+        "method": "tools/call",
+        "params": {"name": "teamai_search", "arguments": {
+            "query": "MCP startup",
+            "kind": "knowledge",
+            "status": "resolved",
+            "source": "claude-code",
+            "limit": 25,
+            "offset": 50,
+        }},
+    })
+    assert captured == [("GET", "/v1/search?q=MCP+startup&kind=knowledge&status=resolved&source=claude-code&limit=25&offset=50")]
+    assert json.loads(response["content"][0]["text"]) == []
+
+
+@pytest.mark.parametrize("arguments", [
+    {"query": "x", "limit": 0},
+    {"query": "x", "limit": 201},
+    {"query": "x", "limit": True},
+    {"query": "x", "offset": -1},
+    {"query": "x", "offset": 1.5},
+])
+def test_mcp_search_rejects_invalid_pagination(arguments):
+    import mcp_server
+
+    with pytest.raises(ValueError, match="limit|offset"):
+        mcp_server.handle({"method": "tools/call", "params": {"name": "teamai_search", "arguments": arguments}})
+
+
 def test_cli_and_mcp_create_records_through_authenticated_api(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_DB", str(tmp_path / "clients.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("SYNC_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("TEAMAI_API_KEY", "integration-test-key-0123456789")
@@ -248,8 +301,52 @@ def test_cli_and_mcp_create_records_through_authenticated_api(tmp_path, monkeypa
         mcp_record = json.loads(mcp_response["result"]["content"][0]["text"])
         assert mcp_record["source"] == "mcp"
 
+        def run_mcp_tool(request_id, name, arguments):
+            request = {"jsonrpc": "2.0", "id": request_id, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
+            process = subprocess.run(
+                [sys.executable, "mcp_server.py"], cwd=project_root, env=child_env,
+                input=json.dumps(request) + "\n", capture_output=True, text=True, timeout=10,
+            )
+            assert process.returncode == 0, process.stderr
+            response = json.loads(process.stdout)
+            assert "error" not in response, response
+            return json.loads(response["result"]["content"][0]["text"])
+
+        solution_note = run_mcp_tool(4, "teamai_create_solution", {
+            "content": "Verified experience with project metadata",
+            "project": "issuehub",
+            "tech_stack": ["FastAPI", "PostgreSQL"],
+            "environment": "Python 3.13",
+            "reproduction": "Start the service against a cold database",
+        })
+        assert solution_note["kind"] == "solution"
+        assert solution_note["project"] == "issuehub"
+        assert solution_note["tech_stack"] == ["FastAPI", "PostgreSQL"]
+        assert "Python 3.13" in solution_note["content"]
+        assert "Start the service against a cold database" in solution_note["content"]
+
+        resolved = run_mcp_tool(2, "teamai_resolve", {
+            "id": mcp_record["id"], "solution": "Configure readiness retry", "verification": "Restarted five times; first request succeeded each time.",
+        })
+        assert resolved["knowledge_status"] == "pending_review"
+
+        candidates = subprocess.run(
+            [sys.executable, "teamai_cli.py", "knowledge", "candidates"],
+            cwd=project_root, env=child_env, capture_output=True, text=True, timeout=10,
+        )
+        assert candidates.returncode == 0, candidates.stderr
+        assert json.loads(candidates.stdout)[0]["id"] == mcp_record["id"]
+
+        knowledge = run_mcp_tool(3, "teamai_publish_knowledge", {
+            "id": mcp_record["id"], "title": "MCP startup connection retry",
+            "content": "Wait for readiness, then retry. Verified across five restarts.", "reviewer": "integration-reviewer",
+        })
+        assert knowledge["kind"] == "knowledge"
+        assert knowledge["parent_issue_id"] == mcp_record["id"]
+        assert knowledge["reviewed_by"] == "integration-reviewer"
+
         with main.db() as conn:
-            assert conn.execute("SELECT COUNT(*) FROM records").fetchone()[0] == 2
+            assert conn.execute("SELECT COUNT(*) FROM records").fetchone()[0] == 4
     finally:
         server.should_exit = True
         server_thread.join(timeout=5)
