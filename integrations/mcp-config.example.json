@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "teamai": {
+      "command": "python",
+      "args": ["C:/path/to/teamai/mcp_server.py"],
+      "env": {
+        "TEAMAI_API": "http://127.0.0.1:8787",
+        "TEAMAI_API_KEY": ""
+      }
+    }
+  }
+}

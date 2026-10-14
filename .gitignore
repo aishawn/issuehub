@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+*.log
+playwright-report/
+test-results/
+.env
+teamai.db
+teamai.db-wal
+teamai.db-shm
+backups/
+*.pre-restore-*.db

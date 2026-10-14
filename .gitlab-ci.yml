@@ -1,0 +1,48 @@
+stages:
+  - verify
+
+python-checks:
+  stage: verify
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.10", "3.11", "3.13"]
+  image: "python:${PYTHON_VERSION}-slim"
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+    PYTHONDONTWRITEBYTECODE: "1"
+  cache:
+    key: python-dependencies
+    paths:
+      - .cache/pip/
+  before_script:
+    - python -m pip install --disable-pip-version-check -r requirements-dev.txt
+  script:
+    - python -m pytest -q
+    - python -m py_compile app/main.py teamai_cli.py mcp_server.py teamai_backup.py teamai_transport.py
+
+frontend-syntax:
+  stage: verify
+  image: node:22-alpine
+  script:
+    - node --check web/app.js
+    - node --check web/detail-focus.js
+    - node --check web/safe-external-url.js
+    - node --check web/load-more.js
+    - node --check web/request-errors.js
+    - node --check web/sync-retry.js
+    - node --test tests/web/*.test.js
+
+browser-smoke:
+  stage: verify
+  image: python:3.11-slim
+  variables:
+    PLAYWRIGHT_BROWSERS_PATH: "$CI_PROJECT_DIR/.cache/ms-playwright"
+  cache:
+    key: playwright-chromium-1.60.0
+    paths:
+      - .cache/ms-playwright/
+  before_script:
+    - python -m pip install --disable-pip-version-check -r requirements-e2e.txt
+    - python -m playwright install --with-deps chromium
+  script:
+    - python scripts/browser_smoke.py

@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+*.pre-restore-*.db
+backups/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tests/
+offline-install/
+.git/
