@@ -96,6 +96,29 @@ def test_work_type_is_saved_searchable_editable_and_copied_to_knowledge(tmp_path
         assert daily.json()["work_type"] == "工作日常"
 
 
+def test_note_work_type_can_be_empty_on_create_and_edit(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        note = api.post("/v1/notes", json={
+            "title": "Personal note without a category", "content": "First draft.",
+            "visibility": "private", "work_type": None,
+        })
+        assert note.status_code == 200
+        created = note.json()
+        assert created["work_type"] == ""
+        assert created["visibility"] == "private"
+
+        edited = api.put(f"/v1/records/{created['id']}", json={
+            "expected_updated_at": created["updated_at"], "title": created["title"],
+            "content": "Updated draft.", "work_type": None,
+        })
+        assert edited.status_code == 200
+        assert edited.json()["work_type"] == ""
+
+        issue = api.post("/v1/issues", json={"content": "Issue category remains defaulted", "work_type": None})
+        assert issue.status_code == 200
+        assert issue.json()["work_type"] == "项目支撑"
+
+
 def test_attachment_upload_list_and_download(tmp_path, monkeypatch):
     objects = {}
 
@@ -345,7 +368,7 @@ def test_record_edit_omitted_lists_preserve_and_empty_lists_clear_user_tags(tmp_
         assert "技术栈" in clear_event["summary"]
 
 
-def test_record_edit_rejects_duplicates_and_protected_knowledge_states(tmp_path, monkeypatch):
+def test_record_edit_reopens_resolved_issue_and_protects_knowledge_states(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as api:
         first = api.post("/v1/notes", json={"title": "First", "content": "First body"}).json()
         second = api.post("/v1/notes", json={"title": "Second", "content": "Second body"}).json()
@@ -358,10 +381,17 @@ def test_record_edit_rejects_duplicates_and_protected_knowledge_states(tmp_path,
 
         issue = api.post("/v1/issues", json={"content": "Resolved records require verification after editing."}).json()
         resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "fix", "verification": "verified"}).json()
-        payload = {"expected_updated_at": "not-used", "title": "Edited", "content": "Edited body", "project": "", "tech_stack": [], "tags": []}
-        assert api.put(f"/v1/records/{issue['id']}", json=payload).status_code == 409
+        payload = {"expected_updated_at": resolved["updated_at"], "title": "Edited", "content": "Edited body", "project": "", "tech_stack": [], "tags": []}
+        edited = api.put(f"/v1/records/{issue['id']}", json=payload)
+        assert edited.status_code == 200
+        assert edited.json()["status"] == "triage"
+        assert edited.json()["knowledge_status"] == "needs_review"
         article_id = resolved["knowledge_record_id"]
-        assert api.put(f"/v1/records/{article_id}", json=payload).status_code == 409
+        article = api.get(f"/v1/issues/{article_id}").json()
+        assert article["knowledge_status"] == "needs_review"
+        assert api.get("/v1/search", params={"kind": "knowledge"}).json() == []
+        protected_payload = {**payload, "expected_updated_at": article["updated_at"]}
+        assert api.put(f"/v1/records/{article_id}", json=protected_payload).status_code == 409
 
 
 def test_classifier_never_treats_solution_language_as_verification(tmp_path, monkeypatch):

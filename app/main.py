@@ -376,7 +376,7 @@ class RecordIn(BaseModel):
     author_id: str | None = Field(default=None, max_length=120)
     session_id: str | None = Field(default=None, max_length=180)
     project: str = Field(default="", max_length=180)
-    work_type: Literal["算法调研", "算法预研", "模型部署", "组件开发", "项目支撑", "工作日常"] = "项目支撑"
+    work_type: Literal["算法调研", "算法预研", "模型部署", "组件开发", "项目支撑", "工作日常"] | None = "项目支撑"
     visibility: Literal["shared", "private"] = "shared"
     tech_stack: list[str] = Field(default_factory=list, max_length=30)
     tags: list[str] = Field(default_factory=list, max_length=30)
@@ -787,7 +787,7 @@ def create_record(record: RecordIn, kind: Literal["note", "issue", "solution"], 
             if duplicate:
                 return response(duplicate) | {"duplicate": True}
             insert_sql = "INSERT INTO records (kind,source,author_id,session_id,title,content,tags,status,external_system,external_id,external_url,sync_error,content_hash,sync_key,created_at,updated_at,project,tech_stack,work_type,visibility,owner_username) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-            params = (kind, safe_source, redact(record.author_id) if record.author_id else None, redact(record.session_id) if record.session_id else None, title, body, json.dumps(tags, ensure_ascii=False), "triage", None, None, None, sync_error, digest, digest, stamp, stamp, redact(record.project), json.dumps([redact(value) for value in record.tech_stack], ensure_ascii=False), record.work_type, visibility, owner_username)
+            params = (kind, safe_source, redact(record.author_id) if record.author_id else None, redact(record.session_id) if record.session_id else None, title, body, json.dumps(tags, ensure_ascii=False), "triage", None, None, None, sync_error, digest, digest, stamp, stamp, redact(record.project), json.dumps([redact(value) for value in record.tech_stack], ensure_ascii=False), record.work_type or "", visibility, owner_username)
             if DATABASE_URL:
                 record_id = conn.execute(insert_sql + " RETURNING id", params).fetchone()["id"]
             else:
@@ -883,6 +883,8 @@ def create_note(record: RecordIn, request: Request) -> dict[str, Any]:
 @app.post("/v1/issues")
 def create_issue(record: RecordIn, request: Request) -> dict[str, Any]:
     username = current_username(request)
+    if record.work_type is None:
+        record = record.model_copy(update={"work_type": "项目支撑"})
     if username and not (record.author_id or "").strip():
         record = record.model_copy(update={"author_id": username})
     return create_record(record, "issue", username)
@@ -890,6 +892,8 @@ def create_issue(record: RecordIn, request: Request) -> dict[str, Any]:
 
 @app.post("/v1/solutions")
 def create_solution(record: RecordIn) -> dict[str, Any]:
+    if record.work_type is None:
+        record = record.model_copy(update={"work_type": "项目支撑"})
     return create_record(record, "solution")
 
 
@@ -1284,8 +1288,6 @@ def edit_record(record_id: int, payload: RecordUpdateIn, request: Request) -> di
                 raise HTTPException(status_code=409, detail="Edit knowledge through the source issue review flow")
             if row["kind"] != "note" and payload.visibility is not None:
                 raise HTTPException(status_code=422, detail="Only notes can change visibility")
-            if row["kind"] == "issue" and row["status"] == "resolved":
-                raise HTTPException(status_code=409, detail="Reopen the issue before editing verified content")
             visibility = payload.visibility or row["visibility"]
             owner_username = row["owner_username"]
             if row["kind"] == "note" and visibility == "private":
@@ -1301,7 +1303,10 @@ def edit_record(record_id: int, payload: RecordUpdateIn, request: Request) -> di
             else:
                 tags = list(dict.fromkeys(system_tags + [redact(tag) for tag in payload.tags]))
             tech_stack = existing_tech if payload.tech_stack is None else [redact(value) for value in payload.tech_stack]
-            work_type = payload.work_type or row["work_type"]
+            if row["kind"] == "note" and "work_type" in payload.model_fields_set:
+                work_type = payload.work_type or ""
+            else:
+                work_type = payload.work_type or row["work_type"]
             digest = record_digest(title, content, row["kind"], visibility, owner_username)
             sync_error = "GitLab synchronization pending" if gitlab_configured() and visibility == "shared" else None
             duplicate = conn.execute("SELECT id FROM records WHERE content_hash = ? AND id != ?", (digest, record_id)).fetchone()
@@ -1316,10 +1321,21 @@ def edit_record(record_id: int, payload: RecordUpdateIn, request: Request) -> di
                 tech_stack_changed=tech_stack != existing_tech,
                 tags_changed=set(tags) != set(existing_tags),
             )
+            reopen_resolved_issue = row["kind"] == "issue" and row["status"] == "resolved" and summary != "保存了记录（无字段变化）"
+            status = "triage" if reopen_resolved_issue else row["status"]
+            knowledge_status = row["knowledge_status"]
+            if reopen_resolved_issue and knowledge_status == "pending_review":
+                knowledge_status = "not_applicable"
+            elif reopen_resolved_issue and knowledge_status == "published" and row["knowledge_record_id"]:
+                knowledge_status = "needs_review"
             conn.execute(
-                "UPDATE records SET title = ?, content = ?, tags = ?, content_hash = ?, project = ?, tech_stack = ?, work_type = ?, visibility = ?, sync_error = ?, sync_lock_until = NULL, updated_at = ? WHERE id = ?",
-                (title, content, json.dumps(tags, ensure_ascii=False), digest, project, json.dumps(tech_stack, ensure_ascii=False), work_type, visibility, sync_error, stamp, record_id),
+                "UPDATE records SET title = ?, content = ?, tags = ?, content_hash = ?, project = ?, tech_stack = ?, work_type = ?, visibility = ?, status = ?, knowledge_status = ?, sync_error = ?, sync_lock_until = NULL, updated_at = ? WHERE id = ?",
+                (title, content, json.dumps(tags, ensure_ascii=False), digest, project, json.dumps(tech_stack, ensure_ascii=False), work_type, visibility, status, knowledge_status, sync_error, stamp, record_id),
             )
+            if reopen_resolved_issue:
+                record_event(conn, record_id, "reopened", "已解决问题因编辑而重新打开，需要重新验证", username)
+                if row["knowledge_status"] == "published" and row["knowledge_record_id"]:
+                    conn.execute("UPDATE records SET knowledge_status = ?, updated_at = ? WHERE id = ?", ("needs_review", stamp, row["knowledge_record_id"]))
             record_event(conn, record_id, "edited", summary, username)
             updated = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
     except INTEGRITY_ERRORS as exc:

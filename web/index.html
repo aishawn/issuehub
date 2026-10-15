@@ -295,14 +295,18 @@
         <label for="title">标题 <span>可选</span></label>
         <input id="title" maxlength="180" placeholder="一句话说明这条记录">
         <label for="content">内容 <span>必填</span></label>
+        <div class="markdown-toolbar" data-toolbar-for="content" role="toolbar" aria-label="正文格式">
+          <button type="button" data-format="heading" title="标题">H</button><button type="button" data-format="bold" title="粗体"><b>B</b></button><button type="button" data-format="italic" title="斜体"><i>I</i></button><button type="button" data-format="list" title="列表">☷</button><button type="button" data-format="task" title="任务列表">☑</button><button type="button" data-format="quote" title="引用">❞</button><button type="button" data-format="code" title="代码">&lt;/&gt;</button><button type="button" data-format="link" title="链接">↗</button><button type="button" data-format="table" title="表格">▦</button><span class="toolbar-spacer"></span><button type="button" data-editor-mode="edit" class="selected">编辑</button><button type="button" data-editor-mode="preview">预览</button>
+        </div>
         <textarea id="content" rows="7" maxlength="100000" placeholder="记录问题现象、处理过程或可复用经验…"></textarea>
+        <div id="content-preview" class="detail-content editor-preview hidden"></div>
         <div class="two-col">
           <div>
             <label for="project">所属项目</label>
             <input id="project" maxlength="180" placeholder="例如：issuehub">
           </div>
           <div>
-            <label for="work-type">所属类型 <span>必选</span></label>
+            <label for="work-type">所属类型 <span id="work-type-hint">必选</span></label>
             <select id="work-type" required>
               <option value="">请选择所属类型</option>
               <option>算法调研</option>
@@ -318,7 +322,7 @@
           <label for="note-visibility">可见范围</label>
           <select id="note-visibility">
             <option value="shared">团队共享</option>
-            <option value="private">个人视图（用户名区分，非安全隔离）</option>
+            <option value="private" selected>个人视图（用户名区分，非安全隔离）</option>
           </select>
           <p class="review-hint">个人视图按用户名区分，不适合保存敏感内容。</p>
         </div>
@@ -332,12 +336,13 @@
         </div>
         <div class="form-foot">
           <p class="review-hint">保存前自动脱敏凭证并检查重复内容。</p>
+          <button id="discard-capture-draft" class="secondary" type="button">丢弃草稿</button>
           <button id="submit" class="primary" type="button">保存</button>
         </div>
       </div>
     </section>
 
-    <section id="detail" class="detail panel hidden" aria-labelledby="detail-title">
+    <section id="detail" class="detail panel hidden" role="dialog" aria-modal="true" aria-labelledby="detail-title">
       <div class="detail-head">
         <div>
           <p class="eyebrow">记录详情</p>
@@ -368,14 +373,19 @@
         <label for="edit-title">标题</label>
         <input id="edit-title" maxlength="180">
         <label for="edit-content">正文</label>
+        <div class="markdown-toolbar" data-toolbar-for="edit-content" role="toolbar" aria-label="正文格式">
+          <button type="button" data-format="heading" title="标题">H</button><button type="button" data-format="bold" title="粗体"><b>B</b></button><button type="button" data-format="italic" title="斜体"><i>I</i></button><button type="button" data-format="list" title="列表">☷</button><button type="button" data-format="task" title="任务列表">☑</button><button type="button" data-format="quote" title="引用">❞</button><button type="button" data-format="code" title="代码">&lt;/&gt;</button><button type="button" data-format="link" title="链接">↗</button><button type="button" data-format="table" title="表格">▦</button><span class="toolbar-spacer"></span><button type="button" data-editor-mode="edit" class="selected">编辑</button><button type="button" data-editor-mode="preview">预览</button>
+        </div>
         <textarea id="edit-content" rows="8" maxlength="100000"></textarea>
+        <div id="edit-content-preview" class="detail-content editor-preview hidden"></div>
+        <ul id="edit-pending-list" class="attachment-list pending-attachment-list"></ul>
         <div class="two-col">
           <div>
             <label for="edit-project">所属项目</label>
             <input id="edit-project" maxlength="180">
           </div>
           <div>
-            <label for="edit-work-type">所属类型</label>
+            <label for="edit-work-type">所属类型 <span id="edit-work-type-hint">必选</span></label>
             <select id="edit-work-type" required>
               <option value="">请选择所属类型</option>
               <option>算法调研</option>

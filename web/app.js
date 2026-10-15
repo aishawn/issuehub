@@ -1,4 +1,4 @@
-const state = { page: 'overview', layout: 'table', kind: 'issue', query: '', status: '', kindFilter: 'issue', noteVisibility: '', filters: { issue: { project: '', workType: '' }, note: { project: '', workType: '' } }, selected: null, offset: 0, hasMore: false, requestId: 0, summary: null, pendingFiles: [], previewUrl: null, previewDownload: null, isAdmin: false, pendingSync: 0 };
+const state = { page: 'overview', layout: 'table', kind: 'issue', query: '', status: '', kindFilter: 'issue', noteVisibility: '', filters: { issue: { project: '', workType: '' }, note: { project: '', workType: '' } }, selected: null, offset: 0, hasMore: false, requestId: 0, summary: null, pendingFiles: [], pendingImages: [], captureRecord: null, previewUrl: null, previewDownload: null, isAdmin: false, pendingSync: 0, draftTimer: null };
 const $ = (selector) => document.querySelector(selector);
 const detailFocus = createDetailFocus(() => {
   const id = Number(state.selected?.id);
@@ -100,19 +100,15 @@ function clipboardFiles(event) {
 }
 
 function renderPendingAttachments() {
-  const list = $('#capture-attachment-list');
-  if (!list) return;
-  if (!state.pendingFiles.length) {
-    list.innerHTML = '<li class="activity-empty">暂无待上传附件</li>';
-    return;
-  }
-  list.innerHTML = state.pendingFiles.map((item, index) => `<li><div class="attachment-main"><span class="attachment-name">${esc(item.name)}</span><span class="attachment-meta">${formatFileSize(item.size)}</span></div><button type="button" class="text-button" data-remove-pending="${index}">移除</button></li>`).join('');
+  const pending = [...state.pendingFiles.map((file) => ({ file, image: false })), ...state.pendingImages.map((file) => ({ file, image: true }))];
+  const html = pending.map(({ file, image }, index) => `<li><div class="attachment-main"><span class="attachment-name">${esc(file.name)}${image ? ' · 正文图片' : ''}</span><span class="attachment-meta">${formatFileSize(file.size)}</span></div><button type="button" class="text-button" data-remove-pending="${index}">移除</button></li>`).join('') || '<li class="activity-empty">暂无待上传附件</li>';
+  ['#capture-attachment-list', '#edit-pending-list'].forEach((selector) => { const list = $(selector); if (list) list.innerHTML = html; });
 }
 
 function addPendingFiles(files) {
   const incoming = [...files].filter(Boolean);
   if (!incoming.length) return;
-  const room = ATTACHMENT_MAX_COUNT - state.pendingFiles.length;
+  const room = ATTACHMENT_MAX_COUNT - state.pendingFiles.length - state.pendingImages.length;
   if (room <= 0) { message(`一次最多添加 ${ATTACHMENT_MAX_COUNT} 个附件。`, true); return; }
   const accepted = [];
   for (const file of incoming.slice(0, room)) {
@@ -308,7 +304,7 @@ function render(rows, append = false) {
     const title = displayTitle(record.title);
     const visibilityBadge = record.kind === 'note' ? `<span class="record-visibility">${record.visibility === 'private' ? '个人视图' : '团队共享'}</span>` : '';
     const preview = record.kind === 'note' ? `<span class="record-preview">${esc((record.content || '').replace(/\s+/g, ' ').slice(0, 180))}${record.content?.length > 180 ? '…' : ''}</span>` : '';
-    return `<button class="record" type="button" data-id="${Number(record.id)}" aria-label="查看：${esc(title)}"><span class="record-title">${esc(title)}</span>${preview}<span class="record-meta"><span class="badge">${esc(names[record.kind] || record.kind)}</span>${record.project ? `<span>${esc(record.project)}</span>` : ''}${visibilityBadge}<span>${esc(statusNames[record.status] || record.status)}</span><time datetime="${esc(record.updated_at)}">${new Date(record.updated_at).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}</time></span></button>`;
+    return `<button class="record" type="button" data-id="${Number(record.id)}" aria-label="查看：${esc(title)}"><span class="record-title" title="${esc(title)}">${esc(title)}</span>${preview}<span class="record-meta"><span class="badge">${esc(names[record.kind] || record.kind)}</span>${record.project ? `<span>${esc(record.project)}</span>` : ''}${visibilityBadge}<span>${esc(statusNames[record.status] || record.status)}</span><time datetime="${esc(record.updated_at)}">${new Date(record.updated_at).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}</time></span></button>`;
   }).join('');
   if (!append) box.innerHTML = '';
   box.insertAdjacentHTML('beforeend', html);
@@ -317,7 +313,7 @@ function render(rows, append = false) {
     button.addEventListener('click', () => openDetail(button.dataset.id));
   });
   if (!append && state.page === 'issues' && state.layout === 'table') {
-    box.innerHTML = `<div class="table-scroll"><table class="issue-table"><thead><tr><th>问题</th><th>所属项目</th><th>所属类型</th><th>状态</th><th>最近更新</th></tr></thead><tbody>${rows.map((record) => `<tr class="issue-row" data-id="${Number(record.id)}" tabindex="0"><td><b>${esc(displayTitle(record.title))}</b><small>#${Number(record.id)}</small></td><td>${projectLabel(record.project)}</td><td>${esc(record.work_type || '未分类')}</td><td><span class="status-chip status-${esc(record.status)}">${esc(statusNames[record.status] || record.status)}</span></td><td>${new Date(record.updated_at).toLocaleDateString('zh-CN')}</td></tr>`).join('')}</tbody></table></div>`;
+    box.innerHTML = `<div class="table-scroll"><table class="issue-table"><thead><tr><th>问题</th><th>所属项目</th><th>所属类型</th><th>状态</th><th>最近更新</th></tr></thead><tbody>${rows.map((record) => `<tr class="issue-row" data-id="${Number(record.id)}" tabindex="0"><td><b title="${esc(displayTitle(record.title))}">${esc(displayTitle(record.title))}</b><small>#${Number(record.id)}</small></td><td>${projectLabel(record.project)}</td><td>${esc(record.work_type || '未分类')}</td><td><span class="status-chip status-${esc(record.status)}">${esc(statusNames[record.status] || record.status)}</span></td><td>${new Date(record.updated_at).toLocaleDateString('zh-CN')}</td></tr>`).join('')}</tbody></table></div>`;
     box.querySelectorAll('.issue-row').forEach((row) => {
       const open = () => openDetail(row.dataset.id);
       row.addEventListener('click', open);
@@ -331,7 +327,7 @@ function renderBoard(rows, box) {
   const columns = [{ key: 'triage', title: '待处理' }, { key: 'in-progress', title: '处理中' }, { key: 'resolved', title: '已解决' }];
   box.innerHTML = `<div class="board-grid">${columns.map((column) => {
     const items = rows.filter((record) => record.kind === 'issue' && record.status === column.key);
-  return `<section class="board-column"><header><b>${column.title}</b><span>${items.length}</span></header>${items.length ? items.map((record) => `<button class="board-card" type="button" data-id="${Number(record.id)}"><b>${esc(displayTitle(record.title))}</b><span>${esc(record.project || '未归属')} · ${esc(record.work_type || '未分类')}</span><small>#${Number(record.id)}</small></button>`).join('') : '<div class="board-empty">暂无记录</div>'}</section>`;
+  return `<section class="board-column"><header><b>${column.title}</b><span>${items.length}</span></header>${items.length ? items.map((record) => `<button class="board-card" type="button" data-id="${Number(record.id)}"><b title="${esc(displayTitle(record.title))}">${esc(displayTitle(record.title))}</b><span>${esc(record.project || '未归属')} · ${esc(record.work_type || '未分类')}</span><small>#${Number(record.id)}</small></button>`).join('') : '<div class="board-empty">暂无记录</div>'}</section>`;
   }).join('')}</div>`;
   box.querySelectorAll('.board-card').forEach((button) => button.addEventListener('click', () => openDetail(button.dataset.id)));
 }
@@ -587,10 +583,14 @@ function renderMarkdown(source) {
   let listType = '';
   let codeLines = [];
   let inCode = false;
-  const inline = (text) => esc(text)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|\s)\*(\S(?:.*?\S)?)\*(?=\s|$)/g, '$1<em>$2</em>');
+  const consumedTableLines = new Set();
+  const inline = (text) => {
+    let value = esc(text);
+    value = value.replace(/!\[([^\]]*)\]\(attachment:\/\/(\d+)\)/g, '<img class="record-inline-image" data-attachment-image="$2" alt="$1" loading="lazy">');
+    value = value.replace(/!\[([^\]]*)\]\(pending-image:([\w-]+)\)/g, '<img class="record-inline-image" data-pending-image="$2" alt="$1">');
+    value = value.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/gi, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    return value.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/(^|\s)\*(\S(?:.*?\S)?)\*(?=\s|$)/g, '$1<em>$2</em>');
+  };
   const flushParagraph = () => {
     if (paragraph.length) output.push(`<p>${paragraph.map(inline).join('<br>')}</p>`);
     paragraph = [];
@@ -599,18 +599,37 @@ function renderMarkdown(source) {
     if (listType) output.push(`</${listType}>`);
     listType = '';
   };
-  for (const line of visibleLines) {
+  for (let lineIndex = 0; lineIndex < visibleLines.length; lineIndex += 1) {
+    const line = visibleLines[lineIndex];
+    if (consumedTableLines.has(lineIndex)) continue;
+    const nextLine = visibleLines[lineIndex + 1] || '';
+    if (line.includes('|') && /^\s*\|?\s*:?-{3,}/.test(nextLine)) {
+      flushParagraph(); closeList();
+      const cells = (value) => value.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
+      const headers = cells(line);
+      output.push(`<table><thead><tr>${headers.map((cell) => `<th>${inline(cell)}</th>`).join('')}</tr></thead><tbody>`);
+      consumedTableLines.add(lineIndex + 1);
+      let tableIndex = lineIndex + 2;
+      while (tableIndex < visibleLines.length && visibleLines[tableIndex].includes('|')) {
+        output.push(`<tr>${cells(visibleLines[tableIndex]).map((cell) => `<td>${inline(cell)}</td>`).join('')}</tr>`);
+        consumedTableLines.add(tableIndex);
+        tableIndex += 1;
+      }
+      output.push('</tbody></table>');
+      continue;
+    }
     if (/^\s*```/.test(line)) {
       flushParagraph(); closeList();
       if (inCode) { output.push(`<pre class="content-code"><code>${esc(codeLines.join('\n'))}</code></pre>`); codeLines = []; }
       inCode = !inCode;
       continue;
     }
+    if (/^\s*>\s?/.test(line)) { flushParagraph(); closeList(); output.push(`<blockquote>${inline(line.replace(/^\s*>\s?/, ''))}</blockquote>`); continue; }
     if (inCode) { codeLines.push(line); continue; }
     const heading = line.match(/^\s{0,3}(#{1,3})\s+(.+)$/);
     if (heading) {
       flushParagraph(); closeList();
-      output.push(`<h3>${inline(heading[2])}</h3>`);
+      output.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`);
       continue;
     }
     const item = line.match(/^\s*(?:([-*+])|(\d+)\.)\s+(.+)$/);
@@ -630,6 +649,62 @@ function renderMarkdown(source) {
   return output.join('') || '<p class="content-empty">暂无正文</p>';
 }
 
+function resolveInlineImages(root, recordId) {
+  root.querySelectorAll('[data-attachment-image]').forEach(async (image) => {
+    try {
+      const { blob } = await fetchAttachmentBlob(recordId, image.dataset.attachmentImage, { inline: true });
+      const url = URL.createObjectURL(blob);
+      image.src = url;
+      image.dataset.objectUrl = url;
+    } catch { image.remove(); }
+  });
+}
+function resolvePendingImages(root) {
+  root.querySelectorAll('[data-pending-image]').forEach((image) => {
+    const file = state.pendingImages.find((item) => item._imageToken === image.dataset.pendingImage);
+    if (file) { const url = URL.createObjectURL(file); image.src = url; image.dataset.objectUrl = url; }
+    else image.remove();
+  });
+}
+function clearPreviewImageUrls(root) {
+  root.querySelectorAll('[data-object-url]').forEach((image) => URL.revokeObjectURL(image.dataset.objectUrl));
+}
+
+function openDraftDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('teamai-editor-drafts', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('drafts', { keyPath: 'key' });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function saveDraft(key, value) {
+  const db = await openDraftDb();
+  return new Promise((resolve, reject) => { const tx = db.transaction('drafts', 'readwrite'); tx.objectStore('drafts').put({ key, ...value, savedAt: Date.now() }); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); }; });
+}
+async function readDraft(key) {
+  const db = await openDraftDb();
+  return new Promise((resolve, reject) => { const request = db.transaction('drafts').objectStore('drafts').get(key); request.onsuccess = () => { db.close(); resolve(request.result || null); }; request.onerror = () => { db.close(); reject(request.error); }; });
+}
+async function removeDraft(key) {
+  const db = await openDraftDb();
+  return new Promise((resolve, reject) => { const tx = db.transaction('drafts', 'readwrite'); tx.objectStore('drafts').delete(key); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); }; });
+}
+const captureDraftKey = () => `capture:${normalizedUser()}:${state.kind}`;
+const editDraftKey = () => `edit:${normalizedUser()}:${Number(state.selected?.id || 0)}`;
+function scheduleDraftSave(mode) {
+  clearTimeout(state.draftTimer);
+  state.draftTimer = setTimeout(async () => {
+    try {
+      const capture = mode === 'capture';
+      const fields = capture
+        ? { title: $('#title').value, content: $('#content').value, project: $('#project').value, workType: $('#work-type').value, visibility: $('#note-visibility').value, kind: state.kind, recordId: state.captureRecord?.id || null, files: [...state.pendingFiles, ...state.pendingImages].map((item) => ({ name: item.name, type: item.type, blob: item, token: item._imageToken || '' })) }
+        : { title: $('#edit-title').value, content: $('#edit-content').value, project: $('#edit-project').value, workType: $('#edit-work-type').value, visibility: $('#edit-visibility').value, files: [...state.pendingImages].map((item) => ({ name: item.name, type: item.type, blob: item, token: item._imageToken || '' })) };
+      await saveDraft(capture ? captureDraftKey() : editDraftKey(), fields);
+    } catch { message('本地草稿保存失败，请检查浏览器存储空间。', true); }
+  }, 350);
+}
+
 async function openDetail(id) {
   const opener = document.activeElement;
   $('#reader-error').classList.add('hidden');
@@ -639,6 +714,7 @@ async function openDetail(id) {
     state.selected = record;
     $('#expand-reading').href = `/web/index.html#record=${encodeURIComponent(record.id)}`;
     $('#detail-title').textContent = displayTitle(record.title);
+    $('#detail-title').title = displayTitle(record.title);
     const externalUrl = safeExternalUrl(record.external_url);
     const project = record.project ? `<span>所属项目：${esc(record.project)}</span>` : '<span class="muted-cell">未归属项目</span>';
     const workType = `<span>所属类型：${esc(record.work_type || '未分类')}</span>`;
@@ -651,6 +727,7 @@ async function openDetail(id) {
       : '';
     $('#detail-meta').innerHTML = `<span class="badge">${esc(names[record.kind] || record.kind)}</span>${statusChip}${project}${workType}${visibility}<time datetime="${esc(record.updated_at)}">${new Date(record.updated_at).toLocaleString('zh-CN')}</time>${externalUrl ? `<a href="${esc(externalUrl)}" target="_blank" rel="noopener noreferrer">查看 GitLab Issue</a>` : ''}${parentIssue}`;
     $('#detail-content').innerHTML = renderMarkdown(record.content);
+    resolveInlineImages($('#detail-content'), record.id);
     const attachmentList = $('#attachment-list');
     attachmentList.innerHTML = (record.attachments || []).map((file) => {
       const kind = attachmentPreviewKind(file.file_name, file.content_type);
@@ -674,13 +751,17 @@ async function openDetail(id) {
     $('#detail-content').classList.remove('hidden');
     const canEdit = Boolean(currentUser()) && (
       (record.kind === 'note' && ownsNote)
-      || (record.kind === 'issue' && record.status !== 'resolved')
+      || record.kind === 'issue'
     );
     $('#edit-record').hidden = !canEdit;
     $('#edit-title').value = record.title;
-    $('#edit-content').value = record.content;
+  $('#edit-content').value = record.content;
+  $('#edit-content-preview').classList.add('hidden');
+  $('#edit-content').classList.remove('hidden');
     $('#edit-project').value = record.project || '';
     $('#edit-work-type').value = record.work_type || '';
+    $('#edit-work-type').required = record.kind === 'issue';
+    $('#edit-work-type-hint').textContent = record.kind === 'issue' ? '必选' : '可选';
     $('#edit-visibility-row').classList.toggle('hidden', record.kind !== 'note');
     $('#edit-visibility').value = record.visibility || 'shared';
     $('#solution-input').value = '';
@@ -711,14 +792,17 @@ function closeDetail(returnFocusTo) {
   }
   const detail = $('#detail');
   if (detail.classList.contains('hidden')) return;
+  const editDirty = $('#edit-title').value !== state.selected?.title || $('#edit-content').value !== state.selected?.content || $('#edit-project').value !== (state.selected?.project || '') || $('#edit-work-type').value !== (state.selected?.work_type || '') || $('#edit-visibility').value !== (state.selected?.visibility || 'shared') || state.pendingImages.length;
+  if (!$('#record-editor').classList.contains('hidden') && editDirty && !window.confirm('修改尚未保存。草稿仍保留在本机，是否关闭？')) return;
   detail.classList.add('hidden');
   $('#detail-backdrop').classList.add('hidden');
   document.body.classList.remove('detail-open');
   detailFocus.close(returnFocusTo);
 }
 
-function openCapture(kind = 'issue') {
+async function openCapture(kind = 'issue') {
   state.kind = kind;
+  state.captureRecord = null;
   document.querySelectorAll('[data-kind]').forEach((item) => {
     const active = item.dataset.kind === state.kind;
     item.classList.toggle('active', active);
@@ -727,10 +811,93 @@ function openCapture(kind = 'issue') {
   $('#capture-title').textContent = state.kind === 'note' ? '新建随手记' : '新建问题';
   $('#content').placeholder = state.kind === 'note' ? '记下想法、资料、临时发现或待办…' : '记录问题现象、处理过程和验证结果…';
   $('#capture').classList.remove('hidden');
-  $('#note-visibility').value = 'shared';
+  $('#work-type').required = state.kind === 'issue';
+  $('#work-type-hint').textContent = state.kind === 'issue' ? '必选' : '可选';
+  $('#note-visibility').value = 'private';
   $('#note-visibility-row').classList.toggle('hidden', state.kind !== 'note');
+  state.pendingImages = [];
   clearPendingFiles();
+  $('#title').value = ''; $('#content').value = ''; $('#project').value = ''; $('#work-type').value = '';
+  try {
+    const draft = await readDraft(captureDraftKey());
+    if (draft && window.confirm('发现未完成的本地草稿，是否恢复？')) {
+      $('#title').value = draft.title || ''; $('#content').value = draft.content || ''; $('#project').value = draft.project || ''; $('#work-type').value = draft.workType || ''; $('#note-visibility').value = draft.visibility || 'private';
+      if (draft.recordId) { try { state.captureRecord = await jsonRequest(`/v1/issues/${draft.recordId}`); } catch { state.captureRecord = null; } }
+      state.pendingFiles = (draft.files || []).filter((file) => !file.token).map((file) => new File([file.blob], file.name, { type: file.type }));
+      state.pendingImages = (draft.files || []).filter((file) => file.token).map((file) => { const restored = new File([file.blob], file.name, { type: file.type }); restored._imageToken = file.token; return restored; });
+      renderPendingAttachments();
+    } else if (draft) await removeDraft(captureDraftKey());
+  } catch { /* Local draft storage may be unavailable in private browsing. */ }
   $('#content').focus();
+}
+
+function applyFormat(textarea, format) {
+  const start = textarea.selectionStart, end = textarea.selectionEnd;
+  const selected = textarea.value.slice(start, end) || '文本';
+  const wrappers = { bold: ['**', '**'], italic: ['*', '*'], code: ['`', '`'], link: ['[', '](https://)'] };
+  const prefixes = { heading: '# ', list: '- ', task: '- [ ] ', quote: '> ' };
+  let value, selectStart, selectEnd;
+  if (format === 'table') { value = '| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |'; selectStart = 0; selectEnd = value.length; }
+  else if (wrappers[format]) { const [before, after] = wrappers[format]; value = `${before}${selected}${after}`; selectStart = start + before.length; selectEnd = selectStart + selected.length; }
+  else { value = `${prefixes[format]}${selected.replace(/\n/g, `\n${prefixes[format]}`)}`; selectStart = start; selectEnd = start + value.length; }
+  textarea.setRangeText(value, start, end, 'select'); textarea.focus(); textarea.setSelectionRange(selectStart, selectEnd);
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+document.querySelectorAll('.markdown-toolbar').forEach((toolbar) => toolbar.addEventListener('click', (event) => {
+  const mode = event.target.closest('[data-editor-mode]');
+  const textarea = document.getElementById(toolbar.dataset.toolbarFor);
+  const preview = document.getElementById(`${textarea.id}-preview`);
+  if (mode) {
+    const isPreview = mode.dataset.editorMode === 'preview';
+    if (isPreview) clearPreviewImageUrls(preview);
+    toolbar.querySelectorAll('[data-editor-mode]').forEach((button) => button.classList.toggle('selected', button === mode));
+    textarea.classList.toggle('hidden', isPreview); preview.classList.toggle('hidden', !isPreview);
+    if (isPreview) preview.innerHTML = renderMarkdown(textarea.value);
+    if (isPreview && state.selected?.id && textarea.id === 'edit-content') resolveInlineImages(preview, state.selected.id);
+    if (isPreview) resolvePendingImages(preview);
+    return;
+  }
+  const format = event.target.closest('[data-format]')?.dataset.format;
+  if (format) applyFormat(textarea, format);
+}));
+
+document.querySelectorAll('#content,#edit-content').forEach((textarea) => {
+  textarea.addEventListener('input', () => scheduleDraftSave(textarea.id === 'content' ? 'capture' : 'edit'));
+  textarea.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey) {
+      const shortcut = { b: 'bold', i: 'italic', k: 'link', '1': event.shiftKey ? 'heading' : null, '7': event.shiftKey ? 'list' : null, '8': event.shiftKey ? 'task' : null }[event.key.toLowerCase()];
+      if (shortcut) { event.preventDefault(); applyFormat(textarea, shortcut); }
+    }
+  });
+  textarea.addEventListener('paste', (event) => {
+    const images = clipboardFiles(event).filter((file) => file.type.startsWith('image/'));
+    if (!images.length) return;
+    event.preventDefault();
+    const image = images[0];
+    if (image.size > ATTACHMENT_MAX_BYTES) { message('粘贴图片超过 20 MB，无法加入正文。', true); return; }
+    const existingCount = textarea.id === 'edit-content' ? (state.selected?.attachments || []).length : 0;
+    if (state.pendingFiles.length + state.pendingImages.length + existingCount >= ATTACHMENT_MAX_COUNT) { message(`一条记录最多 ${ATTACHMENT_MAX_COUNT} 个附件。`, true); return; }
+    const token = crypto.randomUUID();
+    image._imageToken = token;
+    state.pendingImages.push(image);
+    const alt = image.name.replace(/[\]\r\n]/g, '');
+    textarea.setRangeText(`![${alt}](pending-image:${token})`, textarea.selectionStart, textarea.selectionEnd, 'end');
+    scheduleDraftSave(textarea.id === 'content' ? 'capture' : 'edit');
+    renderPendingAttachments();
+    message('图片已加入正文，保存记录时会作为附件上传。');
+  });
+});
+
+async function uploadInlineImages(recordId, content) {
+  let result = content;
+  for (const image of state.pendingImages) {
+    const token = image._imageToken;
+    if (!result.includes(`pending-image:${token}`)) continue;
+    const attachment = await uploadAttachmentFile(recordId, image);
+    result = result.replaceAll(`pending-image:${token}`, `attachment://${Number(attachment.id)}`);
+  }
+  return result;
 }
 
 function setStatusFilter(status, button) {
@@ -756,8 +923,20 @@ document.addEventListener('click', (event) => {
   }
 });
 syncTopNewRecord(state.page);
-$('#close-capture').addEventListener('click', () => $('#capture').classList.add('hidden'));
-document.querySelectorAll('[data-close-capture]').forEach((element) => element.addEventListener('click', () => $('#capture').classList.add('hidden')));
+const closeCapture = () => {
+  const dirty = $('#title').value || $('#content').value || $('#project').value || $('#work-type').value || state.pendingFiles.length || state.pendingImages.length;
+  if (dirty && !window.confirm('修改尚未保存。草稿仍保留在本机，是否关闭？')) return;
+  $('#capture').classList.add('hidden');
+};
+$('#close-capture').addEventListener('click', closeCapture);
+document.querySelectorAll('[data-close-capture]').forEach((element) => element.addEventListener('click', closeCapture));
+$('#discard-capture-draft').addEventListener('click', async () => {
+  if (!window.confirm('丢弃当前草稿及待上传图片？')) return;
+  await removeDraft(captureDraftKey()); state.pendingFiles = []; state.pendingImages = []; state.captureRecord = null;
+  $('#title').value = ''; $('#content').value = ''; $('#project').value = ''; $('#work-type').value = '';
+  renderPendingAttachments(); $('#capture').classList.add('hidden');
+});
+document.querySelectorAll('#title,#project,#work-type,#note-visibility,#edit-title,#edit-project,#edit-work-type,#edit-visibility').forEach((input) => input.addEventListener('input', () => scheduleDraftSave(input.id.startsWith('edit-') ? 'edit' : 'capture')));
 document.querySelectorAll('[data-layout]').forEach((button) => button.addEventListener('click', () => {
   state.layout = button.dataset.layout;
   document.querySelectorAll('[data-layout]').forEach((item) => item.classList.toggle('selected', item === button));
@@ -789,6 +968,9 @@ document.querySelectorAll('[data-note-filter]').forEach((button) => button.addEv
 document.querySelectorAll('[data-kind]').forEach((button) => button.addEventListener('click', () => {
   state.kind = button.dataset.kind;
   $('#note-visibility-row').classList.toggle('hidden', state.kind !== 'note');
+  $('#work-type').required = state.kind === 'issue';
+  $('#work-type-hint').textContent = state.kind === 'issue' ? '必选' : '可选';
+  if (state.kind === 'note') $('#note-visibility').value = 'private';
   $('#capture-title').textContent = state.kind === 'note' ? '新建随手记' : '新建问题';
   $('#content').placeholder = state.kind === 'note' ? '记下想法、资料、临时发现或待办…' : '记录问题现象、处理过程和验证结果…';
   document.querySelectorAll('[data-kind]').forEach((item) => {
@@ -861,8 +1043,17 @@ $('#capture-attachment-list').addEventListener('click', (event) => {
   if (!button) return;
   const index = Number(button.dataset.removePending);
   if (!Number.isInteger(index)) return;
-  state.pendingFiles.splice(index, 1);
+  if (index < state.pendingFiles.length) state.pendingFiles.splice(index, 1);
+  else state.pendingImages.splice(index - state.pendingFiles.length, 1);
   renderPendingAttachments();
+});
+$('#edit-pending-list').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-remove-pending]');
+  if (!button) return;
+  const index = Number(button.dataset.removePending);
+  if (index < state.pendingFiles.length) state.pendingFiles.splice(index, 1);
+  else state.pendingImages.splice(index - state.pendingFiles.length, 1);
+  renderPendingAttachments(); scheduleDraftSave('edit');
 });
 $('#attachment-input').addEventListener('change', async (event) => {
   const files = [...(event.target.files || [])];
@@ -963,6 +1154,7 @@ $('#attachment-preview-body').addEventListener('click', async (event) => {
   } catch (error) { message(`附件下载失败：${error.message}`, true); }
 });
 document.addEventListener('paste', (event) => {
+  if (event.target.matches?.('#content,#edit-content')) return;
   const files = clipboardFiles(event);
   if (!files.length) return;
   const captureOpen = !$('#capture').classList.contains('hidden');
@@ -980,9 +1172,20 @@ $('#edit-record').addEventListener('click', () => {
   if (!state.selected) return;
   $('#detail-content').classList.add('hidden');
   $('#record-editor').classList.remove('hidden');
+  state.pendingImages = [];
+  readDraft(editDraftKey()).then((draft) => {
+    if (!draft) return;
+    if (!window.confirm('发现未完成的本地编辑草稿，是否恢复？')) { removeDraft(editDraftKey()); return; }
+    $('#edit-title').value = draft.title || ''; $('#edit-content').value = draft.content || ''; $('#edit-project').value = draft.project || ''; $('#edit-work-type').value = draft.workType || ''; $('#edit-visibility').value = draft.visibility || 'shared';
+    state.pendingImages = (draft.files || []).map((file) => { const restored = new File([file.blob], file.name, { type: file.type }); restored._imageToken = file.token; return restored; });
+    renderPendingAttachments();
+  }).catch(() => {});
   $('#edit-title').focus();
 });
 $('#cancel-edit').addEventListener('click', () => {
+  const dirty = $('#edit-title').value !== state.selected?.title || $('#edit-content').value !== state.selected?.content || $('#edit-project').value !== (state.selected?.project || '') || $('#edit-work-type').value !== (state.selected?.work_type || '') || $('#edit-visibility').value !== (state.selected?.visibility || 'shared') || state.pendingImages.length;
+  if (dirty && !window.confirm('放弃本次编辑？本地草稿也会删除。')) return;
+  removeDraft(editDraftKey()); state.pendingImages = []; renderPendingAttachments();
   $('#record-editor').classList.add('hidden');
   $('#detail-content').classList.remove('hidden');
   $('#edit-record').focus();
@@ -990,66 +1193,92 @@ $('#cancel-edit').addEventListener('click', () => {
 $('#save-edit').addEventListener('click', async () => {
   if (!state.selected) return;
   if (!currentUser()) { message('请先设置用户名后再编辑。', true); return; }
+  const wasResolvedIssue = state.selected.kind === 'issue' && state.selected.status === 'resolved';
   const title = $('#edit-title').value.trim();
-  const content = $('#edit-content').value.trim();
+  let content = $('#edit-content').value.trim();
   if (!title || !content) { message('标题和正文不能为空。', true); return; }
-  if (!$('#edit-work-type').value) { message('请选择所属类型。', true); $('#edit-work-type').focus(); return; }
+  if (state.selected.kind === 'issue' && !$('#edit-work-type').value) { message('请选择所属类型。', true); $('#edit-work-type').focus(); return; }
   const button = $('#save-edit');
   button.disabled = true;
   try {
+    content = await uploadInlineImages(state.selected.id, content);
     const userTags = (state.selected.tags || []).filter((tag) => !String(tag).startsWith('source::') && !String(tag).startsWith('type::'));
     const record = await jsonRequest(`/v1/records/${state.selected.id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         expected_updated_at: state.selected.updated_at,
         title, content, project: $('#edit-project').value.trim(),
-        work_type: $('#edit-work-type').value,
+        work_type: $('#edit-work-type').value || null,
         tags: userTags,
         tech_stack: state.selected.tech_stack || [],
         ...(state.selected.kind === 'note' ? { visibility: $('#edit-visibility').value } : {}),
       }),
     });
-    message(record.sync_error ? '修改已保存；GitLab 同步待处理。' : '修改已保存。', Boolean(record.sync_error && record.sync_error !== 'GitLab synchronization pending'));
+    state.pendingImages = [];
+    renderPendingAttachments();
+    await removeDraft(editDraftKey());
+    const reopenedMessage = wasResolvedIssue && record.status !== 'resolved' ? '修改已保存；问题已重新打开，需要重新验证。' : '修改已保存。';
+    message(record.sync_error ? `${reopenedMessage} GitLab 同步待处理。` : reopenedMessage, Boolean(record.sync_error && record.sync_error !== 'GitLab synchronization pending'));
     await openDetail(record.id);
     await load();
-    if (record.kind === 'issue') setPage('issues');
+    if (record.kind === 'issue') {
+      if (wasResolvedIssue && record.status !== 'resolved') setStatusFilter('triage');
+      else setPage('issues');
+    }
   } catch (error) { message(error.message, true); }
   finally { button.disabled = false; }
 });
 
 
 $('#submit').addEventListener('click', async () => {
-  const content = $('#content').value.trim();
+  let content = $('#content').value.trim();
   if (!content) { message('请先填写内容。', true); $('#content').focus(); return; }
   const workType = $('#work-type').value;
-  if (!workType) { message('请选择所属类型。', true); $('#work-type').focus(); return; }
+  if (state.kind === 'issue' && !workType) { message('请选择所属类型。', true); $('#work-type').focus(); return; }
   const button = $('#submit');
   button.disabled = true;
   button.setAttribute('aria-busy', 'true');
   message('正在整理并保存…');
   try {
     const endpoint = { note: '/v1/notes', issue: '/v1/issues' }[state.kind];
-    const pending = [...state.pendingFiles];
-    const record = await jsonRequest(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: $('#title').value.trim() || null, content, project: $('#project').value.trim(), work_type: workType, ...(state.kind === 'note' ? { visibility: $('#note-visibility').value } : {}) }) });
+    const pending = [...state.pendingFiles, ...state.pendingImages];
+    const cleanContent = content.replace(/!\[[^\]]*\]\(pending-image:[^)]+\)/g, '').trim() || '图片附件';
+    const record = state.captureRecord || await jsonRequest(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: $('#title').value.trim() || null, content: cleanContent, project: $('#project').value.trim(), work_type: workType || null, ...(state.kind === 'note' ? { visibility: $('#note-visibility').value } : {}) }) });
+    if (!record.duplicate && !state.captureRecord) state.captureRecord = record;
     let uploadError = '';
     let uploaded = 0;
     if (!record.duplicate && pending.length) {
       for (const file of pending) {
         try {
-          await uploadAttachmentFile(record.id, file);
+          const attachment = await uploadAttachmentFile(record.id, file);
+          if (file._imageToken) {
+            const reference = `attachment://${Number(attachment.id)}`;
+            content = content.replaceAll(`pending-image:${file._imageToken}`, reference);
+            $('#content').value = $('#content').value.replaceAll(`pending-image:${file._imageToken}`, reference);
+          }
           uploaded += 1;
+          if (file._imageToken) state.pendingImages = state.pendingImages.filter((item) => item._imageToken !== file._imageToken);
+          else state.pendingFiles = state.pendingFiles.filter((item) => item !== file);
+          renderPendingAttachments();
+          scheduleDraftSave('capture');
         } catch (error) {
           uploadError = error.message;
           break;
         }
       }
     }
+    if (!record.duplicate && !uploadError && content !== record.content) {
+      try {
+        const updated = await jsonRequest(`/v1/records/${record.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_updated_at: record.updated_at, title: record.title, content, project: record.project || '', work_type: record.work_type || null, tags: record.tags || [], tech_stack: record.tech_stack || [], ...(record.kind === 'note' ? { visibility: record.visibility } : {}) }) });
+        Object.assign(record, updated);
+      } catch (error) { uploadError = `图片已上传但正文更新失败：${error.message}`; }
+    }
     const baseMessage = record.duplicate ? '这条内容已经存在。' : record.kind === 'note' && record.visibility === 'private' ? '已保存到个人视图。用户名免密，不具备身份验证。' : record.sync_error ? `已保存到本地；GitLab 同步待处理：${record.sync_error}` : '已保存，记录已进入团队库。';
-    if (uploadError) message(`${baseMessage} 附件上传中断：${uploadError}`, true);
+    if (uploadError) { scheduleDraftSave('capture'); message(`${baseMessage} 附件上传中断：${uploadError}`, true); }
     else if (uploaded) message(`${baseMessage} 已上传 ${uploaded} 个附件。`, Boolean(record.sync_error && record.sync_error !== 'GitLab synchronization pending'));
     else message(baseMessage, Boolean(record.sync_error && record.sync_error !== 'GitLab synchronization pending'));
-    $('#capture').classList.add('hidden');
-    if (!record.duplicate) { $('#title').value = ''; $('#content').value = ''; $('#project').value = ''; $('#work-type').value = ''; clearPendingFiles(); }
+    if (!uploadError) $('#capture').classList.add('hidden');
+    if (!record.duplicate && !uploadError) { state.captureRecord = null; $('#title').value = ''; $('#content').value = ''; $('#project').value = ''; $('#work-type').value = ''; clearPendingFiles(); state.pendingImages = []; renderPendingAttachments(); await removeDraft(captureDraftKey()); }
     await load();
     if (record.kind === 'issue') setPage('issues'); else setPage('notes');
     if (!record.duplicate && (uploaded || pending.length)) await openDetail(record.id);
