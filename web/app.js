@@ -1,4 +1,4 @@
-const state = { page: 'overview', layout: 'table', kind: 'issue', query: '', status: '', kindFilter: 'issue', noteVisibility: '', filters: { issue: { project: '', workType: '' }, note: { project: '', workType: '' } }, selected: null, offset: 0, hasMore: false, requestId: 0, summary: null };
+const state = { page: 'overview', layout: 'table', kind: 'issue', query: '', status: '', kindFilter: 'issue', noteVisibility: '', filters: { issue: { project: '', workType: '' }, note: { project: '', workType: '' } }, selected: null, offset: 0, hasMore: false, requestId: 0, summary: null, pendingFiles: [], previewUrl: null, previewDownload: null };
 const $ = (selector) => document.querySelector(selector);
 const detailFocus = createDetailFocus(() => {
   const id = Number(state.selected?.id);
@@ -7,11 +7,199 @@ const detailFocus = createDetailFocus(() => {
 const names = { note: '随记', issue: '问题' };
 const statusNames = { triage: '待处理', 'in-progress': '处理中', resolved: '已解决' };
 const pageNames = { overview: '总览', issues: '问题', notes: '随手记' };
+const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+const ATTACHMENT_MAX_COUNT = 30;
+const TEXT_PREVIEW_MAX = 1024 * 1024;
 const esc = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
 const displayTitle = (title) => String(title || '').replace(/^\s*问题\s*[:：]\s*/, '');
 const projectLabel = (project) => project ? esc(project) : '<span class="muted-cell">未归属</span>';
 const resultsBox = () => state.page === 'notes' ? $('#notes-results') : $('#results');
 const currentUser = () => localStorage.getItem('teamai-username') || '';
+
+function formatFileSize(bytes) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function attachmentExt(fileName) {
+  const name = String(fileName || '').toLowerCase();
+  const index = name.lastIndexOf('.');
+  return index >= 0 ? name.slice(index) : '';
+}
+
+function attachmentPreviewKind(fileName, contentType = '') {
+  const type = String(contentType || '').toLowerCase().split(';', 1)[0].trim();
+  const ext = attachmentExt(fileName);
+  if (type.startsWith('image/') || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) return 'image';
+  if (type === 'application/pdf' || ext === '.pdf') return 'pdf';
+  if (type.startsWith('audio/') || ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'].includes(ext)) return 'audio';
+  if (type.startsWith('video/') || ['.mp4', '.webm', '.ogv', '.mov'].includes(ext)) return 'video';
+  if (
+    type.startsWith('text/')
+    || type === 'application/json'
+    || type === 'application/xml'
+    || ['.txt', '.md', '.markdown', '.csv', '.json', '.log', '.xml', '.yml', '.yaml', '.html', '.htm', '.css', '.js', '.ts', '.py', '.sh', '.ini', '.conf'].includes(ext)
+  ) return 'text';
+  return 'other';
+}
+
+function canUploadToSelected() {
+  const record = state.selected;
+  if (!record) return false;
+  if (record.kind !== 'note') return true;
+  return Boolean(currentUser()) && record.owner_username === currentUser().trim().toLocaleLowerCase();
+}
+
+function namedClipboardFile(file) {
+  if (file.name && file.name !== 'blob') return file;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const ext = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp', 'application/pdf': '.pdf', 'text/plain': '.txt' }[file.type] || '';
+  return new File([file], `paste-${stamp}${ext}`, { type: file.type || 'application/octet-stream' });
+}
+
+function clipboardFiles(event) {
+  const files = [];
+  for (const item of event.clipboardData?.items || []) {
+    if (item.kind === 'file') {
+      const file = item.getAsFile();
+      if (file) files.push(namedClipboardFile(file));
+    }
+  }
+  if (!files.length) {
+    for (const file of event.clipboardData?.files || []) files.push(namedClipboardFile(file));
+  }
+  return files;
+}
+
+function renderPendingAttachments() {
+  const list = $('#capture-attachment-list');
+  if (!list) return;
+  if (!state.pendingFiles.length) {
+    list.innerHTML = '<li class="activity-empty">暂无待上传附件</li>';
+    return;
+  }
+  list.innerHTML = state.pendingFiles.map((item, index) => `<li><div class="attachment-main"><span class="attachment-name">${esc(item.name)}</span><span class="attachment-meta">${formatFileSize(item.size)}</span></div><button type="button" class="text-button" data-remove-pending="${index}">移除</button></li>`).join('');
+}
+
+function addPendingFiles(files) {
+  const incoming = [...files].filter(Boolean);
+  if (!incoming.length) return;
+  const room = ATTACHMENT_MAX_COUNT - state.pendingFiles.length;
+  if (room <= 0) { message(`一次最多添加 ${ATTACHMENT_MAX_COUNT} 个附件。`, true); return; }
+  const accepted = [];
+  for (const file of incoming.slice(0, room)) {
+    if (file.size > ATTACHMENT_MAX_BYTES) { message(`“${file.name}”超过 20 MB，已跳过。`, true); continue; }
+    if (!file.size) { message(`“${file.name || '未命名文件'}”为空，已跳过。`, true); continue; }
+    accepted.push(file);
+  }
+  if (!accepted.length) return;
+  state.pendingFiles.push(...accepted);
+  if (incoming.length > room) message(`一次最多 ${ATTACHMENT_MAX_COUNT} 个附件，多余文件未加入。`, true);
+  renderPendingAttachments();
+}
+
+function clearPendingFiles() {
+  state.pendingFiles = [];
+  renderPendingAttachments();
+}
+
+async function uploadAttachmentFile(recordId, file) {
+  const body = new FormData();
+  body.append('file', file, file.name);
+  return jsonRequest(`/v1/records/${recordId}/attachments`, { method: 'POST', body });
+}
+
+async function uploadFilesToSelected(files) {
+  if (!state.selected || !canUploadToSelected()) return;
+  const list = [...files].filter(Boolean);
+  if (!list.length) return;
+  const existing = (state.selected.attachments || []).length;
+  const room = ATTACHMENT_MAX_COUNT - existing;
+  if (room <= 0) { message(`一条记录最多 ${ATTACHMENT_MAX_COUNT} 个附件。`, true); return; }
+  let uploaded = 0;
+  for (const file of list.slice(0, room)) {
+    if (file.size > ATTACHMENT_MAX_BYTES) { message(`“${file.name}”超过 20 MB，已跳过。`, true); continue; }
+    if (!file.size) { message(`“${file.name || '未命名文件'}”为空，已跳过。`, true); continue; }
+    try {
+      await uploadAttachmentFile(state.selected.id, file);
+      uploaded += 1;
+    } catch (error) {
+      message(`附件上传失败：${error.message}`, true);
+      if (uploaded) await openDetail(state.selected.id);
+      return;
+    }
+  }
+  if (uploaded) {
+    message(uploaded === 1 ? '附件已添加。' : `已添加 ${uploaded} 个附件。`);
+    await openDetail(state.selected.id);
+  }
+}
+
+async function fetchAttachmentBlob(recordId, attachmentId, { inline = false } = {}) {
+  const url = `/v1/records/${Number(recordId)}/attachments/${Number(attachmentId)}${inline ? '?inline=true' : ''}`;
+  const response = await fetch(url, { headers: { 'X-TeamAI-User': encodeURIComponent(currentUser()) } });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return { blob: await response.blob(), response };
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename || 'attachment';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function closeAttachmentPreview() {
+  const dialog = $('#attachment-preview');
+  if (!dialog || dialog.classList.contains('hidden')) return;
+  dialog.classList.add('hidden');
+  $('#attachment-preview-body').innerHTML = '';
+  if (state.previewUrl) {
+    URL.revokeObjectURL(state.previewUrl);
+    state.previewUrl = null;
+  }
+  state.previewDownload = null;
+}
+
+async function openAttachmentPreview({ recordId, attachmentId, fileName, contentType }) {
+  const kind = attachmentPreviewKind(fileName, contentType);
+  closeAttachmentPreview();
+  $('#attachment-preview-title').textContent = fileName || '附件';
+  const body = $('#attachment-preview-body');
+  body.innerHTML = '<p class="review-hint">正在加载预览…</p>';
+  $('#attachment-preview').classList.remove('hidden');
+  state.previewDownload = { recordId, attachmentId, fileName };
+  try {
+    if (kind === 'other') {
+      body.innerHTML = `<div class="preview-fallback"><p>此格式暂不支持在线预览（如图片、PDF、文本、音视频可预览）。</p><button type="button" class="primary" data-preview-download-now>下载文件</button></div>`;
+      return;
+    }
+    const { blob } = await fetchAttachmentBlob(recordId, attachmentId, { inline: true });
+    const typed = contentType && (!blob.type || blob.type === 'application/octet-stream')
+      ? new Blob([blob], { type: kind === 'text' && /html?/i.test(attachmentExt(fileName)) ? 'text/plain' : contentType })
+      : blob;
+    state.previewUrl = URL.createObjectURL(typed);
+    if (kind === 'image') {
+      body.innerHTML = `<img class="preview-image" src="${state.previewUrl}" alt="${esc(fileName)}">`;
+    } else if (kind === 'pdf') {
+      body.innerHTML = `<iframe class="preview-frame" title="${esc(fileName)}" src="${state.previewUrl}"></iframe>`;
+    } else if (kind === 'audio') {
+      body.innerHTML = `<audio class="preview-media" controls src="${state.previewUrl}"></audio>`;
+    } else if (kind === 'video') {
+      body.innerHTML = `<video class="preview-media preview-video" controls src="${state.previewUrl}"></video>`;
+    } else if (kind === 'text') {
+      const text = await typed.slice(0, TEXT_PREVIEW_MAX + 1).text();
+      const truncated = text.length > TEXT_PREVIEW_MAX;
+      body.innerHTML = `${truncated ? '<p class="review-hint">文件较大，仅预览前 1 MB。</p>' : ''}<pre class="preview-text">${esc(truncated ? text.slice(0, TEXT_PREVIEW_MAX) : text)}</pre>`;
+    }
+  } catch (error) {
+    body.innerHTML = `<div class="preview-fallback"><p>预览失败：${esc(error.message)}</p><button type="button" class="primary" data-preview-download-now>改为下载</button></div>`;
+  }
+}
 
 function showUserLogin(switching = false) {
   $('#username-input').value = currentUser();
@@ -298,9 +486,12 @@ function renderMarkdown(source) {
 
 async function openDetail(id) {
   const opener = document.activeElement;
+  $('#reader-error').classList.add('hidden');
+  $('#reader-error').textContent = '';
   try {
     const record = await jsonRequest(`/v1/issues/${encodeURIComponent(id)}`);
     state.selected = record;
+    $('#expand-reading').href = `/web/index.html#record=${encodeURIComponent(record.id)}`;
     $('#detail-title').textContent = displayTitle(record.title);
     const externalUrl = safeExternalUrl(record.external_url);
     const project = record.project ? `<span>所属项目：${esc(record.project)}</span>` : '<span class="muted-cell">未归属项目</span>';
@@ -310,12 +501,19 @@ async function openDetail(id) {
     $('#detail-meta').innerHTML = `<span class="badge">${esc(names[record.kind] || record.kind)}</span>${statusChip}${project}${workType}${visibility}<time datetime="${esc(record.updated_at)}">${new Date(record.updated_at).toLocaleString('zh-CN')}</time>${externalUrl ? `<a href="${esc(externalUrl)}" target="_blank" rel="noopener noreferrer">查看 GitLab Issue</a>` : ''}`;
     $('#detail-content').innerHTML = renderMarkdown(record.content);
     const attachmentList = $('#attachment-list');
-    attachmentList.innerHTML = (record.attachments || []).map((file) => `<li><a href="/v1/records/${Number(record.id)}/attachments/${Number(file.id)}" data-attachment-url="/v1/records/${Number(record.id)}/attachments/${Number(file.id)}" data-filename="${esc(file.file_name)}">${esc(file.file_name)}</a><span>${(Number(file.size_bytes) / 1024 / 1024).toFixed(2)} MB</span></li>`).join('') || '<li class="activity-empty">暂无附件</li>';
+    attachmentList.innerHTML = (record.attachments || []).map((file) => {
+      const kind = attachmentPreviewKind(file.file_name, file.content_type);
+      const url = `/v1/records/${Number(record.id)}/attachments/${Number(file.id)}`;
+      const previewAction = kind === 'other'
+        ? ''
+        : `<button type="button" class="text-button" data-preview-attachment data-record-id="${Number(record.id)}" data-attachment-id="${Number(file.id)}" data-filename="${esc(file.file_name)}" data-content-type="${esc(file.content_type || '')}">预览</button>`;
+      return `<li><div class="attachment-main"><a href="${url}" data-attachment-url="${url}" data-record-id="${Number(record.id)}" data-attachment-id="${Number(file.id)}" data-filename="${esc(file.file_name)}" data-content-type="${esc(file.content_type || '')}" data-preview-kind="${kind}">${esc(file.file_name)}</a><span class="attachment-meta">${formatFileSize(file.size_bytes)}</span></div><div class="attachment-actions">${previewAction}<button type="button" class="text-button" data-download-attachment data-record-id="${Number(record.id)}" data-attachment-id="${Number(file.id)}" data-filename="${esc(file.file_name)}">下载</button></div></li>`;
+    }).join('') || '<li class="activity-empty">暂无附件</li>';
     const events = record.events || [{ event_type: 'created', summary: '记录已创建', created_at: record.created_at, actor: record.author_id || '' }];
     $('#activity-list').innerHTML = events.length ? events.map((event) => `<li class="activity-item"><span class="activity-dot"></span><div><b>${esc(event.summary)}</b><small>${event.actor ? `${esc(event.actor)} · ` : ''}${new Date(event.created_at).toLocaleString('zh-CN')}</small></div></li>`).join('') : '<li class="activity-empty">暂无活动记录</li>';
     const ownsNote = record.kind === 'note' && Boolean(currentUser()) && record.owner_username === currentUser().trim().toLocaleLowerCase();
     $('#delete-note').hidden = !ownsNote;
-    $('.attachment-upload').classList.toggle('hidden', record.kind === 'note' && !ownsNote);
+    $('#detail .attachment-upload').classList.toggle('hidden', record.kind === 'note' && !ownsNote);
     $('#record-editor').classList.add('hidden');
     $('#detail-content').classList.remove('hidden');
     $('#edit-record').hidden = (record.kind === 'note' && !ownsNote) || (record.kind === 'issue' && record.status === 'resolved');
@@ -335,11 +533,22 @@ async function openDetail(id) {
     $('#issue-actions').classList.toggle('hidden', record.kind !== 'issue');
     detailFocus.open(opener, $('#detail-title'));
   } catch (error) {
-    message(`无法打开记录：${error.message}`, true);
+    if (document.body.classList.contains('reader-mode')) {
+      $('#reader-error').textContent = `无法打开记录：${error.message}`;
+      $('#reader-error').classList.remove('hidden');
+    } else message(`无法打开记录：${error.message}`, true);
   }
 }
 
 function closeDetail(returnFocusTo) {
+  if (!$('#attachment-preview')?.classList.contains('hidden')) {
+    closeAttachmentPreview();
+    return;
+  }
+  if (document.body.classList.contains('reader-mode')) {
+    window.location.assign('/');
+    return;
+  }
   const detail = $('#detail');
   if (detail.classList.contains('hidden')) return;
   detail.classList.add('hidden');
@@ -360,6 +569,7 @@ function openCapture(kind = 'issue') {
   $('#capture').classList.remove('hidden');
   $('#note-visibility').value = 'shared';
   $('#note-visibility-row').classList.toggle('hidden', state.kind !== 'note');
+  clearPendingFiles();
   $('#content').focus();
 }
 
@@ -442,18 +652,29 @@ $('#user-login-form').addEventListener('submit', (event) => {
   updateUserControl();
   state.selected = null;
   closeDetail();
-  load();
+  const requestedRecord = new URLSearchParams(location.hash.slice(1)).get('record');
+  if (requestedRecord && /^\d+$/.test(requestedRecord)) {
+    document.body.classList.add('reader-mode');
+    $('#reader-topbar').classList.remove('hidden');
+    openDetail(requestedRecord);
+  } else load();
+});
+$('#capture-attachment-input').addEventListener('change', (event) => {
+  addPendingFiles(event.target.files || []);
+  event.target.value = '';
+});
+$('#capture-attachment-list').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-remove-pending]');
+  if (!button) return;
+  const index = Number(button.dataset.removePending);
+  if (!Number.isInteger(index)) return;
+  state.pendingFiles.splice(index, 1);
+  renderPendingAttachments();
 });
 $('#attachment-input').addEventListener('change', async (event) => {
-  const file = event.target.files?.[0];
-  if (!file || !state.selected) return;
-  if (file.size > 20 * 1024 * 1024) { message('单个附件不能超过 20 MB。', true); event.target.value = ''; return; }
-  const body = new FormData(); body.append('file', file);
-  try {
-    await jsonRequest(`/v1/records/${state.selected.id}/attachments`, { method: 'POST', body });
-    message('附件已添加。'); await openDetail(state.selected.id);
-  } catch (error) { message(`附件上传失败：${error.message}`, true); }
-  finally { event.target.value = ''; }
+  const files = [...(event.target.files || [])];
+  event.target.value = '';
+  await uploadFilesToSelected(files);
 });
 $('#delete-note').addEventListener('click', async () => {
   if (!state.selected || state.selected.kind !== 'note') return;
@@ -468,16 +689,73 @@ $('#delete-note').addEventListener('click', async () => {
   } catch (error) { message(`删除失败：${error.message}`, true); }
 });
 $('#attachment-list').addEventListener('click', async (event) => {
+  const previewButton = event.target.closest('[data-preview-attachment]');
+  if (previewButton) {
+    event.preventDefault();
+    await openAttachmentPreview({
+      recordId: previewButton.dataset.recordId,
+      attachmentId: previewButton.dataset.attachmentId,
+      fileName: previewButton.dataset.filename,
+      contentType: previewButton.dataset.contentType,
+    });
+    return;
+  }
+  const downloadButton = event.target.closest('[data-download-attachment]');
+  if (downloadButton) {
+    event.preventDefault();
+    try {
+      const { blob } = await fetchAttachmentBlob(downloadButton.dataset.recordId, downloadButton.dataset.attachmentId);
+      downloadBlob(blob, downloadButton.dataset.filename);
+    } catch (error) { message(`附件下载失败：${error.message}`, true); }
+    return;
+  }
   const link = event.target.closest('a[data-attachment-url]');
   if (!link) return;
   event.preventDefault();
+  const kind = link.dataset.previewKind || attachmentPreviewKind(link.dataset.filename, link.dataset.contentType);
+  if (kind !== 'other') {
+    await openAttachmentPreview({
+      recordId: link.dataset.recordId,
+      attachmentId: link.dataset.attachmentId,
+      fileName: link.dataset.filename,
+      contentType: link.dataset.contentType,
+    });
+    return;
+  }
   try {
-    const response = await fetch(link.dataset.attachmentUrl, { headers: { 'X-TeamAI-User': encodeURIComponent(currentUser()) } });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const url = URL.createObjectURL(await response.blob());
-    const download = document.createElement('a'); download.href = url; download.download = link.dataset.filename; download.click();
-    URL.revokeObjectURL(url);
+    const { blob } = await fetchAttachmentBlob(link.dataset.recordId, link.dataset.attachmentId);
+    downloadBlob(blob, link.dataset.filename);
   } catch (error) { message(`附件下载失败：${error.message}`, true); }
+});
+$('#close-attachment-preview').addEventListener('click', closeAttachmentPreview);
+document.querySelectorAll('[data-close-preview]').forEach((element) => element.addEventListener('click', closeAttachmentPreview));
+$('#attachment-preview-download').addEventListener('click', async () => {
+  if (!state.previewDownload) return;
+  try {
+    const { blob } = await fetchAttachmentBlob(state.previewDownload.recordId, state.previewDownload.attachmentId);
+    downloadBlob(blob, state.previewDownload.fileName);
+  } catch (error) { message(`附件下载失败：${error.message}`, true); }
+});
+$('#attachment-preview-body').addEventListener('click', async (event) => {
+  if (!event.target.closest('[data-preview-download-now]') || !state.previewDownload) return;
+  try {
+    const { blob } = await fetchAttachmentBlob(state.previewDownload.recordId, state.previewDownload.attachmentId);
+    downloadBlob(blob, state.previewDownload.fileName);
+  } catch (error) { message(`附件下载失败：${error.message}`, true); }
+});
+document.addEventListener('paste', (event) => {
+  const files = clipboardFiles(event);
+  if (!files.length) return;
+  const captureOpen = !$('#capture').classList.contains('hidden');
+  const detailOpen = !$('#detail').classList.contains('hidden');
+  if (captureOpen) {
+    addPendingFiles(files);
+    return;
+  }
+  if (detailOpen && canUploadToSelected()) {
+    event.preventDefault();
+    uploadFilesToSelected(files);
+  }
 });
 $('#edit-record').addEventListener('click', () => {
   if (!state.selected) return;
@@ -520,20 +798,38 @@ $('#save-edit').addEventListener('click', async () => {
 $('#submit').addEventListener('click', async () => {
   const content = $('#content').value.trim();
   if (!content) { message('请先填写内容。', true); $('#content').focus(); return; }
+  const workType = $('#work-type').value;
+  if (!workType) { message('请选择所属类型。', true); $('#work-type').focus(); return; }
   const button = $('#submit');
   button.disabled = true;
   button.setAttribute('aria-busy', 'true');
   message('正在整理并保存…');
   try {
     const endpoint = { note: '/v1/notes', issue: '/v1/issues' }[state.kind];
-    const workType = $('#work-type').value;
-    if (!workType) { message('请选择所属类型。', true); $('#work-type').focus(); return; }
+    const pending = [...state.pendingFiles];
     const record = await jsonRequest(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: $('#title').value.trim() || null, content, project: $('#project').value.trim(), work_type: workType, ...(state.kind === 'note' ? { visibility: $('#note-visibility').value } : {}) }) });
-    message(record.duplicate ? '这条内容已经存在。' : record.kind === 'note' && record.visibility === 'private' ? '已保存到个人视图。用户名免密，不具备身份验证。' : record.sync_error ? `已保存到本地；GitLab 同步待处理：${record.sync_error}` : '已保存，记录已进入团队库。', Boolean(record.sync_error && record.sync_error !== 'GitLab synchronization pending'));
+    let uploadError = '';
+    let uploaded = 0;
+    if (!record.duplicate && pending.length) {
+      for (const file of pending) {
+        try {
+          await uploadAttachmentFile(record.id, file);
+          uploaded += 1;
+        } catch (error) {
+          uploadError = error.message;
+          break;
+        }
+      }
+    }
+    const baseMessage = record.duplicate ? '这条内容已经存在。' : record.kind === 'note' && record.visibility === 'private' ? '已保存到个人视图。用户名免密，不具备身份验证。' : record.sync_error ? `已保存到本地；GitLab 同步待处理：${record.sync_error}` : '已保存，记录已进入团队库。';
+    if (uploadError) message(`${baseMessage} 附件上传中断：${uploadError}`, true);
+    else if (uploaded) message(`${baseMessage} 已上传 ${uploaded} 个附件。`, Boolean(record.sync_error && record.sync_error !== 'GitLab synchronization pending'));
+    else message(baseMessage, Boolean(record.sync_error && record.sync_error !== 'GitLab synchronization pending'));
     $('#capture').classList.add('hidden');
-    if (!record.duplicate) { $('#title').value = ''; $('#content').value = ''; $('#project').value = ''; $('#work-type').value = ''; }
+    if (!record.duplicate) { $('#title').value = ''; $('#content').value = ''; $('#project').value = ''; $('#work-type').value = ''; clearPendingFiles(); }
     await load();
     if (record.kind === 'issue') setPage('issues'); else setPage('notes');
+    if (!record.duplicate && (uploaded || pending.length)) await openDetail(record.id);
   } catch (error) {
     message(error.message, true);
   } finally {
@@ -568,7 +864,25 @@ $('#resolve-issue').addEventListener('click', () => updateSelected('resolve'));
 $('#reopen-issue').addEventListener('click', () => updateSelected('reopen'));
 document.addEventListener('keydown', (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') $('#submit').click();
-  if (event.key === 'Escape') closeDetail();
+  if (event.key === 'Escape') {
+    if (!$('#attachment-preview')?.classList.contains('hidden')) {
+      closeAttachmentPreview();
+      return;
+    }
+    if (!$('#capture').classList.contains('hidden')) {
+      $('#capture').classList.add('hidden');
+      return;
+    }
+    closeDetail();
+  }
 });
+renderPendingAttachments();
 updateUserControl();
-if (currentUser()) load(); else showUserLogin();
+const readerRecordId = new URLSearchParams(location.hash.slice(1)).get('record');
+if (currentUser()) {
+  if (readerRecordId && /^\d+$/.test(readerRecordId)) {
+    document.body.classList.add('reader-mode');
+    $('#reader-topbar').classList.remove('hidden');
+    openDetail(readerRecordId);
+  } else load();
+} else showUserLogin();

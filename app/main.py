@@ -85,7 +85,29 @@ app.mount("/web", StaticFiles(directory=STATIC_DIR), name="web")
 API_KEY = os.getenv("TEAMAI_API_KEY", "")
 ATTACHMENT_MAX_BYTES = int(os.getenv("ATTACHMENT_MAX_BYTES", str(20 * 1024 * 1024)))
 ATTACHMENT_BUCKET = os.getenv("ATTACHMENT_BUCKET", "teamai-attachments")
-ALLOWED_ATTACHMENT_EXTENSIONS = {".pdf", ".ppt", ".pptx", ".doc", ".docx", ".xls", ".xlsx", ".md", ".txt", ".html", ".htm", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
+PREVIEW_SAFE_INLINE_TYPES = {
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/svg+xml",
+    "audio/mpeg",
+    "audio/wav",
+    "audio/ogg",
+    "audio/mp4",
+    "video/mp4",
+    "video/webm",
+    "video/ogg",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "text/css",
+    "application/json",
+    "application/xml",
+    "text/xml",
+}
 
 
 def object_store() -> Minio:
@@ -949,8 +971,6 @@ async def upload_attachment(record_id: int, request: Request, file: UploadFile =
     if not filename or len(filename) > 240 or filename in {".", ".."}:
         raise HTTPException(status_code=422, detail="Invalid attachment filename")
     extension = Path(filename).suffix.lower()
-    if extension not in ALLOWED_ATTACHMENT_EXTENSIONS:
-        raise HTTPException(status_code=415, detail="File type is not allowed")
     payload = await file.read(ATTACHMENT_MAX_BYTES + 1)
     await file.close()
     if not payload:
@@ -966,6 +986,14 @@ async def upload_attachment(record_id: int, request: Request, file: UploadFile =
     content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     if extension in {".html", ".htm"}:
         content_type = "text/html"
+    elif extension in {".md", ".markdown"}:
+        content_type = "text/markdown"
+    elif extension == ".json":
+        content_type = "application/json"
+    elif extension == ".csv":
+        content_type = "text/csv"
+    elif extension == ".svg":
+        content_type = "image/svg+xml"
     digest = hashlib.sha256(payload).hexdigest()
     object_key = f"records/{record_id}/{uuid.uuid4().hex}{extension}"
     store = object_store()
@@ -997,7 +1025,7 @@ async def upload_attachment(record_id: int, request: Request, file: UploadFile =
 
 
 @app.get("/v1/records/{record_id}/attachments/{attachment_id}")
-def download_attachment(record_id: int, attachment_id: int, request: Request) -> Response:
+def download_attachment(record_id: int, attachment_id: int, request: Request, inline: bool = Query(False)) -> Response:
     username = current_username(request)
     with db() as conn:
         row = conn.execute("SELECT * FROM record_attachments WHERE id = ? AND record_id = ?", (attachment_id, record_id)).fetchone()
@@ -1022,7 +1050,40 @@ def download_attachment(record_id: int, attachment_id: int, request: Request) ->
     if len(payload) > ATTACHMENT_MAX_BYTES:
         raise HTTPException(status_code=502, detail="Stored attachment exceeds the configured size limit")
     safe_name = row["file_name"].replace('"', "")
-    return Response(payload, media_type="application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(safe_name)}", "Content-Length": str(len(payload)), "X-Content-Type-Options": "nosniff"})
+    stored_type = (row["content_type"] or "application/octet-stream").split(";", 1)[0].strip().lower()
+    guessed_type = (mimetypes.guess_type(safe_name)[0] or "").split(";", 1)[0].strip().lower()
+    suffix = Path(safe_name).suffix.lower()
+    if not guessed_type:
+        guessed_type = {
+            ".md": "text/markdown",
+            ".markdown": "text/markdown",
+            ".json": "application/json",
+            ".csv": "text/csv",
+            ".svg": "image/svg+xml",
+        }.get(suffix, "")
+    effective_type = stored_type if stored_type != "application/octet-stream" else (guessed_type or stored_type)
+    if inline:
+        # Serve a real media type only for browser-safe preview formats; keep HTML as plain text.
+        if effective_type in {"text/html", "application/xhtml+xml"} or suffix in {".html", ".htm"}:
+            media_type = "text/plain; charset=utf-8"
+        elif effective_type in PREVIEW_SAFE_INLINE_TYPES or effective_type.startswith(("image/", "audio/", "video/", "text/")):
+            media_type = effective_type
+        else:
+            media_type = "application/octet-stream"
+        disposition = "inline"
+    else:
+        media_type = "application/octet-stream"
+        disposition = "attachment"
+    return Response(
+        payload,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{urllib.parse.quote(safe_name)}",
+            "Content-Length": str(len(payload)),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @app.put("/v1/records/{record_id}")

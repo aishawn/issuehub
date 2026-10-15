@@ -118,14 +118,35 @@ def test_attachment_upload_list_and_download(tmp_path, monkeypatch):
         downloaded = api.get(f"/v1/records/{record['id']}/attachments/{attachment['id']}")
         assert downloaded.content == b"# Plan"
         assert "filename*=" in downloaded.headers["content-disposition"]
+        assert downloaded.headers["content-disposition"].startswith("attachment;")
+        preview = api.get(f"/v1/records/{record['id']}/attachments/{attachment['id']}?inline=true")
+        assert preview.status_code == 200
+        assert preview.content == b"# Plan"
+        assert preview.headers["content-disposition"].startswith("inline;")
+        assert preview.headers["content-type"].startswith("text/markdown") or preview.headers["content-type"].startswith("text/plain")
 
 
-def test_attachment_rejects_unsupported_and_oversized_files(tmp_path, monkeypatch):
+def test_attachment_accepts_any_type_and_rejects_oversized_files(tmp_path, monkeypatch):
+    objects = {}
+
+    class FakeObjectStore:
+        def put_object(self, bucket, key, stream, length, **kwargs):
+            objects[(bucket, key)] = stream.read(length)
+
+        def get_object(self, bucket, key):
+            import io
+            return io.BytesIO(objects[(bucket, key)])
+
+        def remove_object(self, bucket, key):
+            objects.pop((bucket, key), None)
+
     with client(tmp_path, monkeypatch) as api:
         import app.main as main
+        monkeypatch.setattr(main, "object_store", FakeObjectStore)
         record = api.post("/v1/notes", json={"content": "Attachment policy"}).json()
-        unsupported = api.post(f"/v1/records/{record['id']}/attachments", files={"file": ("script.exe", b"bad", "application/octet-stream")})
-        assert unsupported.status_code == 415
+        binary = api.post(f"/v1/records/{record['id']}/attachments", files={"file": ("archive.bin", b"\x00\x01\x02", "application/octet-stream")})
+        assert binary.status_code == 200
+        assert binary.json()["file_name"] == "archive.bin"
         monkeypatch.setattr(main, "ATTACHMENT_MAX_BYTES", 3)
         oversized = api.post(f"/v1/records/{record['id']}/attachments", files={"file": ("large.txt", b"four", "text/plain")})
         assert oversized.status_code == 413
