@@ -439,8 +439,8 @@ class RecordUpdateIn(BaseModel):
     project: str = Field(default="", max_length=180)
     work_type: Literal["算法调研", "算法预研", "模型部署", "组件开发", "项目支撑", "工作日常"] | None = None
     visibility: Literal["shared", "private"] | None = None
-    tech_stack: list[str] = Field(default_factory=list, max_length=30)
-    tags: list[str] = Field(default_factory=list, max_length=30)
+    tech_stack: list[str] | None = Field(default=None, max_length=30)
+    tags: list[str] | None = Field(default=None, max_length=30)
 
     @field_validator("title", "content")
     @classmethod
@@ -457,7 +457,9 @@ class RecordUpdateIn(BaseModel):
 
     @field_validator("tags", "tech_stack")
     @classmethod
-    def normalize_list_values(cls, values: list[str]) -> list[str]:
+    def normalize_list_values(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
         normalized = list(dict.fromkeys(value.strip() for value in values if value.strip()))
         if any(len(value) > 80 for value in normalized):
             raise ValueError("each value must be at most 80 characters")
@@ -500,6 +502,24 @@ def current_actor(request: Request, *, required: bool = False) -> str:
     return actor
 
 
+def admin_usernames() -> set[str]:
+    raw = os.getenv("TEAMAI_ADMIN_USERS", "").strip()
+    if not raw:
+        return set()
+    return {unicodedata.normalize("NFKC", part).strip().casefold() for part in re.split(r"[,;\s]+", raw) if part.strip()}
+
+
+def is_admin_username(username: str) -> bool:
+    return bool(username) and username.casefold() in admin_usernames()
+
+
+def require_admin(request: Request) -> str:
+    username = current_username(request, required=True)
+    if not is_admin_username(username):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return username
+
+
 def can_view_record(row, username: str) -> bool:
     return row["kind"] != "note" or row["visibility"] != "private" or bool(username and row["owner_username"] == username)
 
@@ -513,6 +533,47 @@ def require_note_owner(row, username: str) -> None:
     require_record_visible(row, username)
     if row["kind"] != "note" or not username or row["owner_username"] != username:
         raise HTTPException(status_code=404, detail="Record not found")
+
+
+def publish_knowledge_row(conn, issue, *, title: str, content: str, reviewer: str, stamp: str | None = None) -> Any:
+    """Insert or update the knowledge article for an issue. Caller holds the transaction."""
+    stamp = stamp or now()
+    record_id = issue["id"]
+    tags = json.loads(issue["tags"] or "[]")
+    tags = list(dict.fromkeys([tag for tag in tags if not tag.startswith("type::")] + ["type::knowledge", "knowledge::verified"]))
+    # Scope the hash to the parent issue so auto-publish can reuse the issue body
+    # without colliding with the issue row's unique content_hash.
+    digest = content_hash(title, f"{content}\n[knowledge-parent:{record_id}]")
+    current = conn.execute(
+        "SELECT * FROM records WHERE id = ? AND kind = 'knowledge' AND parent_issue_id = ?",
+        (issue["knowledge_record_id"], record_id),
+    ).fetchone() if issue["knowledge_record_id"] else None
+    duplicate = conn.execute(
+        "SELECT id FROM records WHERE kind = 'knowledge' AND content_hash = ? AND id != ?",
+        (digest, current["id"] if current else -1),
+    ).fetchone()
+    if duplicate:
+        raise HTTPException(status_code=409, detail=f"Knowledge entry already exists as record #{duplicate['id']}")
+    if current:
+        knowledge_id = current["id"]
+        conn.execute(
+            "UPDATE records SET title = ?, content = ?, tags = ?, status = 'resolved', content_hash = ?, sync_key = ?, updated_at = ?, project = ?, tech_stack = ?, work_type = ?, knowledge_status = 'published', reviewed_by = ? WHERE id = ?",
+            (title, content, json.dumps(tags, ensure_ascii=False), digest, digest, stamp, issue["project"], issue["tech_stack"], issue["work_type"], reviewer, knowledge_id),
+        )
+    else:
+        insert_sql = "INSERT INTO records (kind,source,title,content,tags,status,content_hash,sync_key,created_at,updated_at,project,tech_stack,work_type,knowledge_status,parent_issue_id,reviewed_by) VALUES ('knowledge','auto-publish',?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        params = (title, content, json.dumps(tags, ensure_ascii=False), "resolved", digest, digest, stamp, stamp, issue["project"], issue["tech_stack"], issue["work_type"], "published", record_id, reviewer)
+        if DATABASE_URL:
+            knowledge_id = conn.execute(insert_sql + " RETURNING id", params).fetchone()["id"]
+        else:
+            knowledge_id = conn.execute(insert_sql, params).lastrowid
+    conn.execute(
+        "UPDATE records SET knowledge_status = 'published', knowledge_record_id = ?, updated_at = ? WHERE id = ?",
+        (knowledge_id, stamp, record_id),
+    )
+    record_event(conn, record_id, "knowledge_published", f"已发布团队知识 #{knowledge_id}", reviewer)
+    record_event(conn, knowledge_id, "knowledge_published", f"由问题 #{record_id} 发布", reviewer)
+    return knowledge_id
 
 
 @app.middleware("http")
@@ -820,8 +881,11 @@ def create_note(record: RecordIn, request: Request) -> dict[str, Any]:
 
 
 @app.post("/v1/issues")
-def create_issue(record: RecordIn) -> dict[str, Any]:
-    return create_record(record, "issue")
+def create_issue(record: RecordIn, request: Request) -> dict[str, Any]:
+    username = current_username(request)
+    if username and not (record.author_id or "").strip():
+        record = record.model_copy(update={"author_id": username})
+    return create_record(record, "issue", username)
 
 
 @app.post("/v1/solutions")
@@ -829,10 +893,9 @@ def create_solution(record: RecordIn) -> dict[str, Any]:
     return create_record(record, "solution")
 
 
-@app.post("/v1/sync")
-def sync_pending(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
+def run_sync_pending(limit: int = 50) -> dict[str, Any]:
     if not gitlab_configured():
-        return {"synced": 0, "failed": 0, "pending": 0, "message": "GitLab is not configured"}
+        return {"synced": 0, "failed": 0, "pending": 0, "skipped": 0, "message": "GitLab is not configured"}
     with db() as conn:
         rows = conn.execute("SELECT id FROM records WHERE sync_error IS NOT NULL AND (kind != 'note' OR visibility != 'private') AND (sync_lock_until IS NULL OR sync_lock_until < ?) ORDER BY updated_at ASC LIMIT ?", (time.time(), limit)).fetchall()
     synced = 0
@@ -851,11 +914,68 @@ def sync_pending(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]
     return {"synced": synced, "failed": failed, "skipped": skipped, "pending": pending}
 
 
+@app.post("/v1/sync")
+def sync_pending(request: Request, limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
+    require_admin(request)
+    return run_sync_pending(limit)
+
+
+@app.get("/v1/me")
+def me(request: Request) -> dict[str, Any]:
+    username = current_username(request)
+    return {"username": username, "is_admin": is_admin_username(username)}
+
+
+@app.get("/v1/admin/users")
+def admin_users(request: Request) -> dict[str, Any]:
+    require_admin(request)
+    with db() as conn:
+        note_owners = conn.execute(
+            "SELECT owner_username AS username, COUNT(*) AS note_count, MAX(updated_at) AS last_note_at "
+            "FROM records WHERE kind = 'note' AND owner_username != '' GROUP BY owner_username"
+        ).fetchall()
+        issue_authors = conn.execute(
+            "SELECT lower(author_id) AS username, COUNT(*) AS issue_count, MAX(updated_at) AS last_issue_at "
+            "FROM records WHERE kind = 'issue' AND author_id IS NOT NULL AND trim(author_id) != '' GROUP BY lower(author_id)"
+        ).fetchall()
+        actors = conn.execute(
+            "SELECT lower(actor) AS username, COUNT(*) AS event_count, MAX(created_at) AS last_event_at "
+            "FROM record_events WHERE actor IS NOT NULL AND trim(actor) != '' GROUP BY lower(actor)"
+        ).fetchall()
+    users: dict[str, dict[str, Any]] = {}
+    for row in note_owners:
+        name = (row["username"] or "").casefold()
+        if not name:
+            continue
+        entry = users.setdefault(name, {"username": name, "is_admin": is_admin_username(name), "note_count": 0, "issue_count": 0, "event_count": 0, "last_active_at": None})
+        entry["note_count"] = row["note_count"]
+        entry["last_active_at"] = max(filter(None, [entry["last_active_at"], row["last_note_at"]]), default=None)
+    for row in issue_authors:
+        name = (row["username"] or "").casefold()
+        if not name:
+            continue
+        entry = users.setdefault(name, {"username": name, "is_admin": is_admin_username(name), "note_count": 0, "issue_count": 0, "event_count": 0, "last_active_at": None})
+        entry["issue_count"] = row["issue_count"]
+        entry["last_active_at"] = max(filter(None, [entry["last_active_at"], row["last_issue_at"]]), default=None)
+    for row in actors:
+        name = (row["username"] or "").casefold()
+        if not name:
+            continue
+        entry = users.setdefault(name, {"username": name, "is_admin": is_admin_username(name), "note_count": 0, "issue_count": 0, "event_count": 0, "last_active_at": None})
+        entry["event_count"] = row["event_count"]
+        entry["last_active_at"] = max(filter(None, [entry["last_active_at"], row["last_event_at"]]), default=None)
+    for name in admin_usernames():
+        users.setdefault(name, {"username": name, "is_admin": True, "note_count": 0, "issue_count": 0, "event_count": 0, "last_active_at": None})
+        users[name]["is_admin"] = True
+    ordered = sorted(users.values(), key=lambda item: (item["last_active_at"] or "", item["username"]), reverse=True)
+    return {"users": ordered, "total": len(ordered)}
+
+
 async def sync_retry_worker(interval: float) -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            result = await asyncio.to_thread(sync_pending, limit=10)
+            result = await asyncio.to_thread(run_sync_pending, 10)
             logger.info(
                 "automatic GitLab sync finished synced=%s failed=%s skipped=%s pending=%s",
                 result["synced"], result["failed"], result["skipped"], result["pending"],
@@ -925,16 +1045,17 @@ def search(request: Request, q: str = Query(default="", max_length=200), kind: s
 
 
 @app.get("/v1/filter-options")
-def filter_options(request: Request, kind: Literal["issue", "note"] = Query(...)) -> dict[str, list[str]]:
+def filter_options(request: Request, kind: Literal["issue", "note", "knowledge"] = Query(...)) -> dict[str, list[str]]:
     username = current_username(request)
     visible = "(kind != 'note' OR visibility != 'private' OR owner_username = ?)"
+    knowledge_gate = " AND knowledge_status = 'published'" if kind == "knowledge" else ""
     with db() as conn:
         projects = conn.execute(
-            f"SELECT DISTINCT project FROM records WHERE {visible} AND kind = ? AND TRIM(project) != '' ORDER BY LOWER(project), project",
+            f"SELECT DISTINCT project FROM records WHERE {visible} AND kind = ?{knowledge_gate} AND TRIM(project) != '' ORDER BY LOWER(project), project",
             (username, kind),
         ).fetchall()
         work_types = conn.execute(
-            f"SELECT DISTINCT work_type FROM records WHERE {visible} AND kind = ? AND TRIM(work_type) != '' ORDER BY work_type",
+            f"SELECT DISTINCT work_type FROM records WHERE {visible} AND kind = ?{knowledge_gate} AND TRIM(work_type) != '' ORDER BY work_type",
             (username, kind),
         ).fetchall()
     standard_work_types = ["算法调研", "算法预研", "模型部署", "组件开发", "项目支撑", "工作日常"]
@@ -1086,14 +1207,68 @@ def download_attachment(record_id: int, attachment_id: int, request: Request, in
     )
 
 
+@app.delete("/v1/records/{record_id}/attachments/{attachment_id}")
+def delete_attachment(record_id: int, attachment_id: int, request: Request) -> dict[str, Any]:
+    username = current_username(request, required=True)
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        record = lock_record(conn, record_id)
+        if record and record["kind"] == "note":
+            require_note_owner(record, username)
+        else:
+            require_record_visible(record, username)
+        row = conn.execute("SELECT * FROM record_attachments WHERE id = ? AND record_id = ?", (attachment_id, record_id)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        object_key = row["object_key"]
+        file_name = row["file_name"]
+        conn.execute("DELETE FROM record_attachments WHERE id = ? AND record_id = ?", (attachment_id, record_id))
+        record_event(conn, record_id, "attachment_removed", f"删除附件：{file_name}", username)
+    try:
+        object_store().remove_object(ATTACHMENT_BUCKET, object_key)
+    except Exception as exc:
+        logger.error("Attachment delete cleanup failed record_id=%s attachment_id=%s error=%s", record_id, attachment_id, type(exc).__name__)
+    return {"deleted": True, "id": attachment_id}
+
+
+def edit_change_summary(
+    *,
+    title_changed: bool,
+    content_changed: bool,
+    project_changed: bool,
+    work_type_changed: bool,
+    visibility_changed: bool,
+    tech_stack_changed: bool,
+    tags_changed: bool,
+) -> str:
+    labels = []
+    if title_changed:
+        labels.append("标题")
+    if content_changed:
+        labels.append("正文")
+    if project_changed:
+        labels.append("所属项目")
+    if work_type_changed:
+        labels.append("所属类型")
+    if visibility_changed:
+        labels.append("可见范围")
+    if tech_stack_changed:
+        labels.append("技术栈")
+    if tags_changed:
+        labels.append("标签")
+    if not labels:
+        return "保存了记录（无字段变化）"
+    if len(labels) == 1:
+        return f"编辑了{labels[0]}"
+    return "编辑了" + "、".join(labels)
+
+
 @app.put("/v1/records/{record_id}")
 def edit_record(record_id: int, payload: RecordUpdateIn, request: Request) -> dict[str, Any]:
-    username = current_username(request)
+    username = current_username(request, required=True)
     title = redact(payload.title)
     content = redact(payload.content)
     project = redact(payload.project)
-    tech_stack = [redact(value) for value in payload.tech_stack]
-    digest = content_hash(title, content)
     stamp = now()
     try:
         with db() as conn:
@@ -1118,19 +1293,34 @@ def edit_record(record_id: int, payload: RecordUpdateIn, request: Request) -> di
                     raise HTTPException(status_code=403, detail="Only the note owner can make it personal")
                 if row["visibility"] != "private" and (row["external_system"] or row["external_id"] or row["sync_error"]):
                     raise HTTPException(status_code=409, detail="A note already synchronized or queued for GitLab cannot be made personal")
+            existing_tags = json.loads(row["tags"] or "[]")
+            existing_tech = json.loads(row["tech_stack"] or "[]")
+            system_tags = [tag for tag in existing_tags if tag.startswith(("source::", "type::"))]
+            if payload.tags is None:
+                tags = existing_tags
+            else:
+                tags = list(dict.fromkeys(system_tags + [redact(tag) for tag in payload.tags]))
+            tech_stack = existing_tech if payload.tech_stack is None else [redact(value) for value in payload.tech_stack]
+            work_type = payload.work_type or row["work_type"]
             digest = record_digest(title, content, row["kind"], visibility, owner_username)
             sync_error = "GitLab synchronization pending" if gitlab_configured() and visibility == "shared" else None
             duplicate = conn.execute("SELECT id FROM records WHERE content_hash = ? AND id != ?", (digest, record_id)).fetchone()
             if duplicate:
                 raise HTTPException(status_code=409, detail=f"内容与记录 #{duplicate['id']} 重复，未更新")
-            existing_tags = json.loads(row["tags"] or "[]")
-            system_tags = [tag for tag in existing_tags if tag.startswith(("source::", "type::"))]
-            tags = list(dict.fromkeys(system_tags + [redact(tag) for tag in payload.tags]))
+            summary = edit_change_summary(
+                title_changed=title != row["title"],
+                content_changed=content != row["content"],
+                project_changed=project != (row["project"] or ""),
+                work_type_changed=work_type != row["work_type"],
+                visibility_changed=visibility != row["visibility"],
+                tech_stack_changed=tech_stack != existing_tech,
+                tags_changed=set(tags) != set(existing_tags),
+            )
             conn.execute(
                 "UPDATE records SET title = ?, content = ?, tags = ?, content_hash = ?, project = ?, tech_stack = ?, work_type = ?, visibility = ?, sync_error = ?, sync_lock_until = NULL, updated_at = ? WHERE id = ?",
-                (title, content, json.dumps(tags, ensure_ascii=False), digest, project, json.dumps(tech_stack, ensure_ascii=False), payload.work_type or row["work_type"], visibility, sync_error, stamp, record_id),
+                (title, content, json.dumps(tags, ensure_ascii=False), digest, project, json.dumps(tech_stack, ensure_ascii=False), work_type, visibility, sync_error, stamp, record_id),
             )
-            record_event(conn, record_id, "edited", "编辑了标题、正文或分类信息")
+            record_event(conn, record_id, "edited", summary, username)
             updated = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
     except INTEGRITY_ERRORS as exc:
         if "content_hash" not in str(exc):
@@ -1143,13 +1333,16 @@ def edit_record(record_id: int, payload: RecordUpdateIn, request: Request) -> di
     return response(updated)
 
 
-@app.delete("/v1/notes/{record_id}")
-def delete_note(record_id: int, request: Request) -> dict[str, Any]:
-    username = current_username(request, required=True)
+def delete_record_with_attachments(record_id: int, *, kind: str, username: str) -> dict[str, Any]:
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = lock_record(conn, record_id)
-        require_note_owner(row, username)
+        if kind == "note":
+            require_note_owner(row, username)
+        else:
+            require_record_visible(row, username)
+            if not row or row["kind"] != kind:
+                raise HTTPException(status_code=404, detail="Record not found")
         attachments = conn.execute("SELECT object_key FROM record_attachments WHERE record_id = ?", (record_id,)).fetchall()
         conn.execute("DELETE FROM record_events WHERE record_id = ?", (record_id,))
         conn.execute("DELETE FROM records WHERE id = ?", (record_id,))
@@ -1159,13 +1352,25 @@ def delete_note(record_id: int, request: Request) -> dict[str, Any]:
             for attachment in attachments:
                 store.remove_object(ATTACHMENT_BUCKET, attachment["object_key"])
         except Exception as exc:
-            logger.error("Deleted note attachment cleanup failed record_id=%s error=%s", record_id, type(exc).__name__)
+            logger.error("Deleted %s attachment cleanup failed record_id=%s error=%s", kind, record_id, type(exc).__name__)
     return {"deleted": True, "id": record_id}
+
+
+@app.delete("/v1/notes/{record_id}")
+def delete_note(record_id: int, request: Request) -> dict[str, Any]:
+    return delete_record_with_attachments(record_id, kind="note", username=current_username(request, required=True))
+
+
+@app.delete("/v1/issues/{record_id}")
+def delete_issue(record_id: int, request: Request) -> dict[str, Any]:
+    return delete_record_with_attachments(record_id, kind="issue", username=current_username(request, required=True))
 
 
 def update_issue(record_id: int, payload: SolutionIn, status: str, actor: str = "") -> dict[str, Any]:
     if status == "resolved" and not (payload.verification or "").strip():
         raise HTTPException(status_code=422, detail="Verification evidence is required to resolve an issue")
+    if not (actor or "").strip():
+        raise HTTPException(status_code=400, detail="Enter a username to update issues")
     try:
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -1185,18 +1390,26 @@ def update_issue(record_id: int, payload: SolutionIn, status: str, actor: str = 
                 raise HTTPException(status_code=409, detail=f"内容与记录 #{duplicate['id']} 重复，未更新")
             sync_error = "GitLab synchronization pending" if gitlab_configured() else None
             knowledge_status = row["knowledge_status"]
-            if status == "resolved" and row["kind"] == "issue" and knowledge_status == "not_applicable":
-                knowledge_status = "pending_review"
             if status == "triage" and row["kind"] == "issue" and knowledge_status == "pending_review":
                 knowledge_status = "not_applicable"
+            if status == "triage" and row["kind"] == "issue" and knowledge_status == "published" and row["knowledge_record_id"]:
+                knowledge_status = "needs_review"
             conn.execute("UPDATE records SET content = ?, updated_at = ?, status = ?, content_hash = ?, sync_error = ?, knowledge_status = ? WHERE id = ?", (new_content, stamp, status, new_hash, sync_error, knowledge_status, record_id))
             event_type = {"in-progress": "solution_added", "resolved": "resolved", "triage": "reopened"}[status]
-            summary = {"in-progress": "追加解决方案", "resolved": "问题已解决并进入知识审核", "triage": "问题重新打开"}[status]
-            record_event(conn, record_id, event_type, summary, actor if status == "resolved" else "")
+            summary = {"in-progress": "追加解决方案", "resolved": "问题已解决并自动发布团队知识", "triage": "问题重新打开"}[status]
+            record_event(conn, record_id, event_type, summary, actor)
             if status == "triage" and row["kind"] == "issue" and row["knowledge_status"] == "published" and row["knowledge_record_id"]:
-                knowledge_status = "needs_review"
-                conn.execute("UPDATE records SET knowledge_status = ?, updated_at = ? WHERE id = ?", (knowledge_status, stamp, record_id))
-                conn.execute("UPDATE records SET knowledge_status = ?, updated_at = ? WHERE id = ?", (knowledge_status, stamp, row["knowledge_record_id"]))
+                conn.execute("UPDATE records SET knowledge_status = ?, updated_at = ? WHERE id = ?", ("needs_review", stamp, row["knowledge_record_id"]))
+            if status == "resolved":
+                issue_after = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
+                publish_knowledge_row(
+                    conn,
+                    issue_after,
+                    title=issue_after["title"],
+                    content=issue_after["content"],
+                    reviewer=redact(actor),
+                    stamp=stamp,
+                )
             updated = conn.execute("SELECT * FROM records WHERE id = ?", (record_id,)).fetchone()
     except INTEGRITY_ERRORS as exc:
         if "content_hash" not in str(exc):
@@ -1210,8 +1423,8 @@ def update_issue(record_id: int, payload: SolutionIn, status: str, actor: str = 
 
 
 @app.post("/v1/issues/{record_id}/append-solution")
-def append_solution(record_id: int, payload: SolutionIn) -> dict[str, Any]:
-    return update_issue(record_id, payload, "in-progress")
+def append_solution(record_id: int, payload: SolutionIn, request: Request) -> dict[str, Any]:
+    return update_issue(record_id, payload, "in-progress", current_actor(request, required=True))
 
 
 @app.post("/v1/issues/{record_id}/resolve")
@@ -1220,12 +1433,13 @@ def resolve_issue(record_id: int, payload: SolutionIn, request: Request) -> dict
 
 
 @app.post("/v1/issues/{record_id}/reopen")
-def reopen_issue(record_id: int, payload: SolutionIn) -> dict[str, Any]:
-    return update_issue(record_id, payload, "triage")
+def reopen_issue(record_id: int, payload: SolutionIn, request: Request) -> dict[str, Any]:
+    return update_issue(record_id, payload, "triage", current_actor(request, required=True))
 
 
 @app.get("/v1/knowledge/candidates")
-def knowledge_candidates(limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0)) -> list[dict[str, Any]]:
+def knowledge_candidates(request: Request, limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0)) -> list[dict[str, Any]]:
+    require_admin(request)
     with db() as conn:
         rows = conn.execute("SELECT * FROM records WHERE kind = 'issue' AND status = 'resolved' AND knowledge_status IN ('pending_review','needs_review') ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
     return [response(row) for row in rows]
@@ -1233,6 +1447,7 @@ def knowledge_candidates(limit: int = Query(default=100, ge=1, le=200), offset: 
 
 @app.post("/v1/issues/{record_id}/publish-knowledge")
 def publish_knowledge(record_id: int, payload: KnowledgePublishIn, request: Request) -> dict[str, Any]:
+    admin = require_admin(request)
     title = redact(payload.title)
     content = redact(payload.content)
     if os.getenv("APP_ENV", "development").strip().lower() == "production":
@@ -1247,9 +1462,11 @@ def publish_knowledge(record_id: int, payload: KnowledgePublishIn, request: Requ
             raise HTTPException(status_code=403, detail="Invalid authenticated reviewer identity")
         if required_group not in groups:
             raise HTTPException(status_code=403, detail="Reviewer group membership required")
+        if not is_admin_username(reviewer.casefold()) and not is_admin_username(admin):
+            raise HTTPException(status_code=403, detail="Admin access required")
         reviewer = redact(reviewer)
     else:
-        reviewer = redact(payload.reviewer)
+        reviewer = redact(payload.reviewer) or admin
         if not reviewer:
             raise HTTPException(status_code=422, detail="Reviewer label is required in development mode")
     stamp = now()
@@ -1263,26 +1480,7 @@ def publish_knowledge(record_id: int, payload: KnowledgePublishIn, request: Requ
                 raise HTTPException(status_code=404, detail="Issue not found")
             if issue["status"] != "resolved" or issue["knowledge_status"] not in {"pending_review", "needs_review"}:
                 raise HTTPException(status_code=409, detail="Only resolved issues awaiting review can be published")
-            tags = json.loads(issue["tags"] or "[]")
-            tags = list(dict.fromkeys([tag for tag in tags if not tag.startswith("type::")] + ["type::knowledge", "knowledge::verified"]))
-            digest = content_hash(title, content)
-            current = conn.execute("SELECT * FROM records WHERE id = ? AND kind = 'knowledge' AND parent_issue_id = ?", (issue["knowledge_record_id"], record_id)).fetchone() if issue["knowledge_record_id"] else None
-            duplicate = conn.execute("SELECT id FROM records WHERE kind = 'knowledge' AND content_hash = ? AND id != ?", (digest, current["id"] if current else -1)).fetchone()
-            if duplicate:
-                raise HTTPException(status_code=409, detail=f"Knowledge entry already exists as record #{duplicate['id']}")
-            if current:
-                knowledge_id = current["id"]
-                conn.execute("UPDATE records SET title = ?, content = ?, tags = ?, status = 'resolved', content_hash = ?, sync_key = ?, updated_at = ?, project = ?, tech_stack = ?, work_type = ?, knowledge_status = 'published', reviewed_by = ? WHERE id = ?", (title, content, json.dumps(tags, ensure_ascii=False), digest, digest, stamp, issue["project"], issue["tech_stack"], issue["work_type"], reviewer, knowledge_id))
-            else:
-                insert_sql = "INSERT INTO records (kind,source,title,content,tags,status,content_hash,sync_key,created_at,updated_at,project,tech_stack,work_type,knowledge_status,parent_issue_id,reviewed_by) VALUES ('knowledge','team-review',?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-                params = (title, content, json.dumps(tags, ensure_ascii=False), "resolved", digest, digest, stamp, stamp, issue["project"], issue["tech_stack"], issue["work_type"], "published", record_id, reviewer)
-                if DATABASE_URL:
-                    knowledge_id = conn.execute(insert_sql + " RETURNING id", params).fetchone()["id"]
-                else:
-                    knowledge_id = conn.execute(insert_sql, params).lastrowid
-            conn.execute("UPDATE records SET knowledge_status = 'published', knowledge_record_id = ?, updated_at = ? WHERE id = ?", (knowledge_id, stamp, record_id))
-            record_event(conn, record_id, "knowledge_published", f"审核通过并发布团队知识 #{knowledge_id}", reviewer)
-            record_event(conn, knowledge_id, "knowledge_published", f"由问题 #{record_id} 审核发布", reviewer)
+            knowledge_id = publish_knowledge_row(conn, issue, title=title, content=content, reviewer=reviewer, stamp=stamp)
             row = conn.execute("SELECT * FROM records WHERE id = ?", (knowledge_id,)).fetchone()
     except INTEGRITY_ERRORS as exc:
         if "content_hash" not in str(exc):

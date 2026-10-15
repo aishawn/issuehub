@@ -37,7 +37,7 @@ Issue Hub 先作为第一版共享团队知识库，GitLab CE 可选同步原始
 - `/v1/overview` 提供总览统计。
 - 记录详情、追加方案、解决、重新打开。
 - Web 录入和管理仅要求填写所属项目、所属类型，不再显示技术栈、环境、复现步骤、来源和标签字段；已存在的旧元数据在存储/API 层保留以兼容历史数据。五类所属类型由 schema migration version 4 新增的 `work_type` 字段保存，旧记录保留为空并显示“未分类”，不会自动猜测分类。
-- Web 管理台已拆分总览、问题、知识审核、知识库和同步管理；问题支持表格/看板、组合过滤和浏览器本地保存视图。详情展示创建、编辑、方案、解决/重开、知识发布及 GitLab 同步活动时间线。
+- Web 管理台拆分总览、问题、随手记；管理员另见知识审核（遗留队列）、同步管理、用户管理。已沉淀经验在问题页按「已解决」筛选查看，不再单独提供知识库页。问题支持表格/看板与组合过滤。解决 Issue 时默认自动发布团队知识，无需人工审核；重开会隐藏知识，再次解决后自动再发布。
 - PostgreSQL schema migration version 2 新增 record_events；version 4 新增所属类型；SQLite 启动也会兼容创建活动表及所属类型字段。旧记录只补“历史记录”标记，不虚构迁移前的具体活动，也不改写旧分类。
 - `teamai_cli.py`：可选 CLI 客户端；支持 `note`、`issue`、`capture`、`search`、带验证证据的 `resolve`，及 `knowledge candidates/publish` 审核流程。
 - `mcp_server.py`：AI Skill 使用的 MCP 工具，支持按类型/状态/来源过滤并分页搜索、创建、追加方案、带验证证据解决、审核候选和经明确批准发布知识。
@@ -55,7 +55,8 @@ Issue Hub 先作为第一版共享团队知识库，GitLab CE 可选同步原始
 - 尚未使用真实 GitLab CE 地址、项目 ID 和 Token 做联调。
 - PostgreSQL Compose 路径已配置，但本机无可用 Docker/测试库，尚需 CI 或部署环境执行真实 PostgreSQL 集成测试和 Compose 启动验证。
 - 生产 PostgreSQL 的自动定时备份及异机恢复演练仍需在部署环境落实；`teamai_backup.py` 只适用于本地 SQLite。
-- 当前临时策略为记录和备份永久保留；没有应用内删除/清理接口或自动清理任务。若未来变更策略，应同时处理主库、本机安全副本和异机备份。
+- 当前临时策略为记录和备份永久保留；虽有单条记录/附件删除 API，但没有自动清理任务。若未来变更策略，应同时处理主库、本机安全副本和异机备份。
+- 管理员由环境变量 `TEAMAI_ADMIN_USERS`（逗号分隔用户名）配置；知识审核遗留队列、GitLab 手动同步、用户活动页仅管理员可访问。
 
 ## 3. 架构和数据流
 
@@ -134,7 +135,7 @@ python teamai_cli.py knowledge candidates
 python teamai_cli.py knowledge publish 1 --title "MCP 首次连接失败处理" --content "..." --reviewer "team-account"
 ```
 
-默认 API 地址是 `http://127.0.0.1:8787`。可通过 `TEAMAI_API` 修改；配置鉴权时同时设置 `TEAMAI_API_KEY`。
+默认 API 地址是 `http://127.0.0.1:8787`。可通过 `TEAMAI_API` 修改（内网示例：`http://10.110.66.11:8787`）；配置鉴权时同时设置 `TEAMAI_API_KEY`。`note` / `issue` / `capture` / `resolve` 成功后，stdout 仍是 JSON，stderr 会提示 Issue Hub 查看地址与 `#record=<id>` 深链。若 Web 与 API 基址不同，可另设 `TEAMAI_WEB_URL`。
 
 ### MCP Server
 

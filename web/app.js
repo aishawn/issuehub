@@ -1,20 +1,44 @@
-const state = { page: 'overview', layout: 'table', kind: 'issue', query: '', status: '', kindFilter: 'issue', noteVisibility: '', filters: { issue: { project: '', workType: '' }, note: { project: '', workType: '' } }, selected: null, offset: 0, hasMore: false, requestId: 0, summary: null, pendingFiles: [], previewUrl: null, previewDownload: null };
+const state = { page: 'overview', layout: 'table', kind: 'issue', query: '', status: '', kindFilter: 'issue', noteVisibility: '', filters: { issue: { project: '', workType: '' }, note: { project: '', workType: '' } }, selected: null, offset: 0, hasMore: false, requestId: 0, summary: null, pendingFiles: [], previewUrl: null, previewDownload: null, isAdmin: false, pendingSync: 0 };
 const $ = (selector) => document.querySelector(selector);
 const detailFocus = createDetailFocus(() => {
   const id = Number(state.selected?.id);
   return id ? document.querySelector(`.page-view:not(.hidden) [data-id="${id}"]`) || $('#search') : $('#search');
 });
-const names = { note: '随记', issue: '问题' };
-const statusNames = { triage: '待处理', 'in-progress': '处理中', resolved: '已解决' };
-const pageNames = { overview: '总览', issues: '问题', notes: '随手记' };
+const names = { note: '随记', issue: '问题', knowledge: '知识' };
+const statusNames = { triage: '待处理', 'in-progress': '处理中', resolved: '已解决', published: '已发布' };
+const pageNames = { overview: '总览', issues: '问题', notes: '随手记', review: '知识审核', sync: '同步管理', users: '用户管理' };
 const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
 const ATTACHMENT_MAX_COUNT = 30;
 const TEXT_PREVIEW_MAX = 1024 * 1024;
 const esc = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
 const displayTitle = (title) => String(title || '').replace(/^\s*问题\s*[:：]\s*/, '');
 const projectLabel = (project) => project ? esc(project) : '<span class="muted-cell">未归属</span>';
-const resultsBox = () => state.page === 'notes' ? $('#notes-results') : $('#results');
+const resultsBox = () => ({ notes: $('#notes-results'), review: $('#review-results') }[state.page] || $('#results'));
 const currentUser = () => localStorage.getItem('teamai-username') || '';
+const normalizedUser = () => currentUser().trim().toLocaleLowerCase();
+
+function applyAdminVisibility() {
+  document.querySelectorAll('.admin-gate').forEach((element) => element.classList.toggle('hidden', !state.isAdmin));
+  if (!state.isAdmin && ['review', 'sync', 'users'].includes(state.page)) setPage('overview');
+}
+
+async function refreshMe() {
+  if (!currentUser()) {
+    state.isAdmin = false;
+    applyAdminVisibility();
+    return null;
+  }
+  try {
+    const me = await jsonRequest('/v1/me');
+    state.isAdmin = Boolean(me.is_admin);
+    applyAdminVisibility();
+    return me;
+  } catch (error) {
+    state.isAdmin = false;
+    applyAdminVisibility();
+    return null;
+  }
+}
 
 function formatFileSize(bytes) {
   const size = Number(bytes) || 0;
@@ -36,11 +60,13 @@ function attachmentPreviewKind(fileName, contentType = '') {
   if (type === 'application/pdf' || ext === '.pdf') return 'pdf';
   if (type.startsWith('audio/') || ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'].includes(ext)) return 'audio';
   if (type.startsWith('video/') || ['.mp4', '.webm', '.ogv', '.mov'].includes(ext)) return 'video';
+  if (type === 'text/html' || type === 'application/xhtml+xml' || ['.html', '.htm'].includes(ext)) return 'html';
+  if (type === 'text/markdown' || ['.md', '.markdown'].includes(ext)) return 'markdown';
   if (
     type.startsWith('text/')
     || type === 'application/json'
     || type === 'application/xml'
-    || ['.txt', '.md', '.markdown', '.csv', '.json', '.log', '.xml', '.yml', '.yaml', '.html', '.htm', '.css', '.js', '.ts', '.py', '.sh', '.ini', '.conf'].includes(ext)
+    || ['.txt', '.csv', '.json', '.log', '.xml', '.yml', '.yaml', '.css', '.js', '.ts', '.py', '.sh', '.ini', '.conf'].includes(ext)
   ) return 'text';
   return 'other';
 }
@@ -175,22 +201,36 @@ async function openAttachmentPreview({ recordId, attachmentId, fileName, content
   state.previewDownload = { recordId, attachmentId, fileName };
   try {
     if (kind === 'other') {
-      body.innerHTML = `<div class="preview-fallback"><p>此格式暂不支持在线预览（如图片、PDF、文本、音视频可预览）。</p><button type="button" class="primary" data-preview-download-now>下载文件</button></div>`;
+      body.innerHTML = `<div class="preview-fallback"><p>此格式暂不支持在线预览（如图片、PDF、Markdown、HTML、文本、音视频可预览）。</p><button type="button" class="primary" data-preview-download-now>下载文件</button></div>`;
       return;
     }
     const { blob } = await fetchAttachmentBlob(recordId, attachmentId, { inline: true });
     const typed = contentType && (!blob.type || blob.type === 'application/octet-stream')
-      ? new Blob([blob], { type: kind === 'text' && /html?/i.test(attachmentExt(fileName)) ? 'text/plain' : contentType })
+      ? new Blob([blob], { type: contentType })
       : blob;
-    state.previewUrl = URL.createObjectURL(typed);
     if (kind === 'image') {
+      state.previewUrl = URL.createObjectURL(typed);
       body.innerHTML = `<img class="preview-image" src="${state.previewUrl}" alt="${esc(fileName)}">`;
     } else if (kind === 'pdf') {
+      state.previewUrl = URL.createObjectURL(typed);
       body.innerHTML = `<iframe class="preview-frame" title="${esc(fileName)}" src="${state.previewUrl}"></iframe>`;
     } else if (kind === 'audio') {
+      state.previewUrl = URL.createObjectURL(typed);
       body.innerHTML = `<audio class="preview-media" controls src="${state.previewUrl}"></audio>`;
     } else if (kind === 'video') {
+      state.previewUrl = URL.createObjectURL(typed);
       body.innerHTML = `<video class="preview-media preview-video" controls src="${state.previewUrl}"></video>`;
+    } else if (kind === 'markdown') {
+      const text = await typed.slice(0, TEXT_PREVIEW_MAX + 1).text();
+      const truncated = text.length > TEXT_PREVIEW_MAX;
+      const source = truncated ? text.slice(0, TEXT_PREVIEW_MAX) : text;
+      body.innerHTML = `${truncated ? '<p class="review-hint">文件较大，仅预览前 1 MB。</p>' : ''}<div class="preview-markdown detail-content">${renderMarkdown(source)}</div>`;
+    } else if (kind === 'html') {
+      const text = await typed.slice(0, TEXT_PREVIEW_MAX + 1).text();
+      const truncated = text.length > TEXT_PREVIEW_MAX;
+      const source = truncated ? text.slice(0, TEXT_PREVIEW_MAX) : text;
+      state.previewUrl = URL.createObjectURL(new Blob([source], { type: 'text/html;charset=utf-8' }));
+      body.innerHTML = `${truncated ? '<p class="review-hint">文件较大，仅预览前 1 MB。脚本与外链交互已禁用。</p>' : '<p class="review-hint">沙箱预览：脚本已禁用，样式与布局可查看。</p>'}<iframe class="preview-frame preview-html" title="${esc(fileName)}" src="${state.previewUrl}" sandbox referrerpolicy="no-referrer"></iframe>`;
     } else if (kind === 'text') {
       const text = await typed.slice(0, TEXT_PREVIEW_MAX + 1).text();
       const truncated = text.length > TEXT_PREVIEW_MAX;
@@ -210,7 +250,8 @@ function showUserLogin(switching = false) {
 
 function updateUserControl() {
   const name = currentUser();
-  $('#user-switch').textContent = name ? `用户名：${name}` : '设置用户名';
+  const role = state.isAdmin ? ' · 管理员' : '';
+  $('#user-switch').textContent = name ? `用户名：${name}${role}` : '设置用户名';
   $('#user-login').classList.toggle('hidden', Boolean(name));
 }
 
@@ -253,6 +294,8 @@ function render(rows, append = false) {
       box.innerHTML = filtered
         ? `<div class="empty"><div class="empty-copy"><strong>还没有符合条件的随手记</strong><span>调整可见范围或搜索关键词</span></div></div>`
         : `<div class="empty"><div class="empty-copy"><strong>还没有随手记</strong><span>可以先记录一条想法、资料或待办</span></div></div>`;
+    } else if (state.page === 'review') {
+      box.innerHTML = `<div class="empty"><div class="empty-copy"><strong>暂无待审核项</strong><span>解决后默认自动发布；此处仅显示遗留队列</span></div></div>`;
     } else {
       box.innerHTML = filtered
         ? `<div class="empty"><div class="empty-copy"><strong>没有匹配记录</strong><span>换个关键词，或调整筛选条件</span></div></div>`
@@ -303,12 +346,14 @@ function syncTopNewRecord(page) {
 }
 
 async function loadFilterOptions(kind) {
-  const prefix = kind === 'note' ? 'notes' : 'issues';
+  const prefix = { note: 'notes', issue: 'issues' }[kind] || kind;
   try {
     const options = await jsonRequest(`/v1/filter-options?kind=${kind}`);
     const projectSelect = $(`#${prefix}-project-filter`);
     const workTypeSelect = $(`#${prefix}-work-type-filter`);
+    if (!projectSelect || !workTypeSelect) return;
     const filters = state.filters[kind];
+    if (!filters) return;
     const previousProject = filters.project;
     const previousWorkType = filters.workType;
     projectSelect.innerHTML = `<option value="">全部项目</option><option value="__unassigned__">未指定项目</option>${options.projects.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('')}`;
@@ -324,6 +369,10 @@ async function loadFilterOptions(kind) {
 }
 
 function setPage(page) {
+  if (['review', 'sync', 'users'].includes(page) && !state.isAdmin) {
+    message('仅管理员可访问该功能。', true);
+    page = 'overview';
+  }
   const changed = state.page !== page;
   if (changed) {
     closeDetail(document.activeElement);
@@ -332,16 +381,31 @@ function setPage(page) {
   state.page = page;
   $('#page-title').textContent = pageNames[page] || '总览';
   syncTopNewRecord(page);
-  $('#search-context').textContent = page === 'notes' ? '搜索当前随手记' : page === 'issues' ? '搜索当前问题' : '搜索问题';
-  $('#search').placeholder = page === 'notes' ? '搜索随手记…' : page === 'issues' ? '搜索问题…' : '搜索问题…';
+  const searchHints = {
+    notes: ['搜索当前随手记', '搜索随手记…'],
+    issues: ['搜索当前问题', '搜索问题…'],
+    review: ['搜索待审核', '搜索待审核…'],
+  };
+  const [context, placeholder] = searchHints[page] || ['搜索问题', '搜索问题…'];
+  $('#search-context').textContent = context;
+  $('#search').placeholder = placeholder;
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.page === page));
-  document.querySelectorAll('.page-view').forEach((view) => view.classList.toggle('hidden', view.dataset.view !== page));
+  document.querySelectorAll('.page-view').forEach((view) => {
+    const isAdminView = view.classList.contains('admin-only');
+    const match = view.dataset.view === page;
+    view.classList.toggle('hidden', !match || (isAdminView && !state.isAdmin));
+  });
   if (page === 'issues') { state.kindFilter = 'issue'; state.status = $('#status-filter').value; loadFilterOptions('issue'); loadRecords(); }
   if (page === 'notes') { state.kindFilter = 'note'; state.status = ''; loadFilterOptions('note'); loadRecords(); }
+  if (page === 'review') { state.kindFilter = 'issue'; loadReviewQueue(); }
+  if (page === 'sync') { refreshSyncStatus(); }
+  if (page === 'users') { loadUsers(); }
+  if (page === 'overview') loadSummary();
 }
 
 function updateLoadMore() {
-  const buttonId = state.page === 'notes' ? '#notes-load-more' : '#load-more';
+  if (!['issues', 'notes'].includes(state.page)) return;
+  const buttonId = { notes: '#notes-load-more', issues: '#load-more' }[state.page];
   let button = $(buttonId);
   if (!button) {
     button = document.createElement('button');
@@ -350,7 +414,7 @@ function updateLoadMore() {
     button.type = 'button';
     button.textContent = '加载更多';
     button.addEventListener('click', createLoadMoreHandler(() => loadRecords(true)));
-    resultsBox().after(button);
+    resultsBox()?.after(button);
   }
   button.hidden = !state.hasMore;
   button.disabled = false;
@@ -358,6 +422,7 @@ function updateLoadMore() {
 }
 
 async function loadRecords(append = false) {
+  if (!['issues', 'notes'].includes(state.page)) return true;
   if (!append) state.offset = 0;
   const requestId = ++state.requestId;
   const params = new URLSearchParams({ q: state.query, limit: '30', offset: String(state.offset) });
@@ -367,7 +432,7 @@ async function loadRecords(append = false) {
   const filters = state.filters[state.kindFilter] || {};
   if (filters.project) params.set('project', filters.project);
   if (filters.workType) params.set('work_type', filters.workType);
-  const button = state.page === 'notes' ? $('#notes-load-more') : $('#load-more');
+  const button = ({ notes: $('#notes-load-more'), issues: $('#load-more') })[state.page];
   if (append && button) { button.disabled = true; button.textContent = '正在加载…'; }
   resultsBox().setAttribute('aria-busy', 'true');
   try {
@@ -376,7 +441,7 @@ async function loadRecords(append = false) {
     render(rows, append);
     state.offset += rows.length;
     state.hasMore = rows.length === 30;
-    const count = state.page === 'notes' ? $('#notes-count') : $('#count');
+    const count = ({ notes: $('#notes-count'), issues: $('#count') })[state.page];
     if (count) count.textContent = `${state.offset}${state.hasMore ? '+' : ''} 条`;
     updateLoadMore();
     return true;
@@ -396,6 +461,81 @@ async function loadRecords(append = false) {
   }
 }
 
+async function loadReviewQueue() {
+  if (!state.isAdmin) return;
+  const box = $('#review-results');
+  $('#review-editor').classList.add('hidden');
+  box.setAttribute('aria-busy', 'true');
+  try {
+    const rows = await jsonRequest('/v1/knowledge/candidates');
+    $('#nav-review').textContent = String(rows.length);
+    $('#review-count').textContent = `${rows.length} 条`;
+    if (!rows.length) {
+      render([], false);
+      return;
+    }
+    box.innerHTML = rows.map((record) => `<button class="record" type="button" data-review-id="${Number(record.id)}"><span class="record-title">${esc(displayTitle(record.title))}</span><span class="record-meta"><span class="badge">待审核</span>${record.project ? `<span>${esc(record.project)}</span>` : ''}<span>${esc(record.knowledge_status)}</span></span></button>`).join('');
+    box.querySelectorAll('[data-review-id]').forEach((button) => button.addEventListener('click', () => openReviewEditor(button.dataset.reviewId)));
+  } catch (error) {
+    box.innerHTML = `<div class="empty error" role="alert">加载失败：${esc(error.message)}</div>`;
+  } finally {
+    box.setAttribute('aria-busy', 'false');
+  }
+}
+
+async function openReviewEditor(id) {
+  try {
+    const record = await jsonRequest(`/v1/issues/${encodeURIComponent(id)}`);
+    $('#review-issue-id').value = String(record.id);
+    $('#review-title').value = displayTitle(record.title);
+    $('#review-content').value = record.content;
+    $('#review-editor-title').textContent = `整理并发布 #${record.id}`;
+    $('#review-editor').classList.remove('hidden');
+    $('#review-title').focus();
+  } catch (error) {
+    message(`无法打开审核项：${error.message}`, true);
+  }
+}
+
+async function loadUsers() {
+  if (!state.isAdmin) return;
+  try {
+    const payload = await jsonRequest('/v1/admin/users');
+    const rows = payload.users || [];
+    $('#users-empty').classList.toggle('hidden', rows.length > 0);
+    $('#users-rows').innerHTML = rows.map((user) => `<tr><td><b>${esc(user.username)}</b></td><td>${user.is_admin ? '管理员' : '用户'}</td><td>${Number(user.note_count) || 0}</td><td>${Number(user.issue_count) || 0}</td><td>${Number(user.event_count) || 0}</td><td>${user.last_active_at ? new Date(user.last_active_at).toLocaleString('zh-CN') : '—'}</td></tr>`).join('');
+  } catch (error) {
+    message(`用户列表加载失败：${error.message}`, true);
+  }
+}
+
+function updateSyncStatusUI(pending) {
+  state.pendingSync = Number(pending) || 0;
+  const text = state.pendingSync > 0 ? `有 ${state.pendingSync} 条记录等待同步到 GitLab。` : '当前没有待同步记录。';
+  ['#overview-sync-status', '#sync-manage-status'].forEach((selector) => {
+    const element = $(selector);
+    if (element) element.textContent = text;
+  });
+  ['#overview-sync-retry', '#sync-retry'].forEach((selector) => {
+    const button = $(selector);
+    if (!button) return;
+    button.hidden = !state.isAdmin || state.pendingSync <= 0;
+  });
+}
+
+async function refreshSyncStatus() {
+  if (!state.isAdmin) return;
+  try {
+    const health = await jsonRequest('/health');
+    updateSyncStatusUI(health.pending_sync || 0);
+  } catch (error) {
+    ['#overview-sync-status', '#sync-manage-status'].forEach((selector) => {
+      const element = $(selector);
+      if (element) element.textContent = `无法读取同步状态：${error.message}`;
+    });
+  }
+}
+
 async function loadSummary() {
   try {
     const [health, overview] = await Promise.all([jsonRequest('/health'), jsonRequest('/v1/overview')]);
@@ -408,6 +548,10 @@ async function loadSummary() {
     $('#metric-recent').textContent = overview.recent;
     state.summary = overview;
     $('#nav-issues').textContent = Object.values(overview.by_status || {}).reduce((sum, count) => sum + count, 0);
+    if (state.isAdmin) {
+      $('#nav-review').textContent = String(overview.pending_knowledge || 0);
+      updateSyncStatusUI(health.pending_sync || 0);
+    }
     $('#overview-updated').textContent = `更新于 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
     const recent = await jsonRequest('/v1/search?kind=issue&limit=6');
     $('#overview-rows').innerHTML = recent.map((record) => `<tr class="issue-row" data-id="${Number(record.id)}" tabindex="0"><td><b>${esc(displayTitle(record.title))}</b><small>#${Number(record.id)}</small></td><td>${projectLabel(record.project)}</td><td>${esc(record.work_type || '未分类')}</td><td><span class="status-chip status-${esc(record.status)}">${esc(statusNames[record.status] || record.status)}</span></td><td>${new Date(record.updated_at).toLocaleDateString('zh-CN')}</td></tr>`).join('');
@@ -425,6 +569,8 @@ async function loadSummary() {
 }
 
 async function load() {
+  await refreshMe();
+  updateUserControl();
   await Promise.all([loadSummary(), loadRecords()]);
 }
 
@@ -498,7 +644,12 @@ async function openDetail(id) {
     const workType = `<span>所属类型：${esc(record.work_type || '未分类')}</span>`;
     const visibility = record.kind === 'note' ? `<span class="record-visibility">${record.visibility === 'private' ? `个人视图 · ${esc(record.owner_username || '')}` : '团队共享'}</span>` : '';
     const statusChip = `<span class="status-chip status-${esc(record.status)}">${esc(statusNames[record.status] || record.status)}</span>`;
-    $('#detail-meta').innerHTML = `<span class="badge">${esc(names[record.kind] || record.kind)}</span>${statusChip}${project}${workType}${visibility}<time datetime="${esc(record.updated_at)}">${new Date(record.updated_at).toLocaleString('zh-CN')}</time>${externalUrl ? `<a href="${esc(externalUrl)}" target="_blank" rel="noopener noreferrer">查看 GitLab Issue</a>` : ''}`;
+    const ownsNote = record.kind === 'note' && Boolean(currentUser()) && record.owner_username === normalizedUser();
+    const canManageAttachments = (record.kind === 'issue' || record.kind === 'note') && (record.kind !== 'note' || ownsNote) && Boolean(currentUser());
+    const parentIssue = record.kind === 'knowledge' && record.parent_issue_id
+      ? `<button type="button" class="text-button" data-open-parent="${Number(record.parent_issue_id)}">查看来源问题 #${Number(record.parent_issue_id)}</button>`
+      : '';
+    $('#detail-meta').innerHTML = `<span class="badge">${esc(names[record.kind] || record.kind)}</span>${statusChip}${project}${workType}${visibility}<time datetime="${esc(record.updated_at)}">${new Date(record.updated_at).toLocaleString('zh-CN')}</time>${externalUrl ? `<a href="${esc(externalUrl)}" target="_blank" rel="noopener noreferrer">查看 GitLab Issue</a>` : ''}${parentIssue}`;
     $('#detail-content').innerHTML = renderMarkdown(record.content);
     const attachmentList = $('#attachment-list');
     attachmentList.innerHTML = (record.attachments || []).map((file) => {
@@ -507,16 +658,25 @@ async function openDetail(id) {
       const previewAction = kind === 'other'
         ? ''
         : `<button type="button" class="text-button" data-preview-attachment data-record-id="${Number(record.id)}" data-attachment-id="${Number(file.id)}" data-filename="${esc(file.file_name)}" data-content-type="${esc(file.content_type || '')}">预览</button>`;
-      return `<li><div class="attachment-main"><a href="${url}" data-attachment-url="${url}" data-record-id="${Number(record.id)}" data-attachment-id="${Number(file.id)}" data-filename="${esc(file.file_name)}" data-content-type="${esc(file.content_type || '')}" data-preview-kind="${kind}">${esc(file.file_name)}</a><span class="attachment-meta">${formatFileSize(file.size_bytes)}</span></div><div class="attachment-actions">${previewAction}<button type="button" class="text-button" data-download-attachment data-record-id="${Number(record.id)}" data-attachment-id="${Number(file.id)}" data-filename="${esc(file.file_name)}">下载</button></div></li>`;
+      const deleteAction = canManageAttachments
+        ? `<button type="button" class="text-button danger-text" data-delete-attachment data-record-id="${Number(record.id)}" data-attachment-id="${Number(file.id)}" data-filename="${esc(file.file_name)}">删除</button>`
+        : '';
+      return `<li><div class="attachment-main"><a href="${url}" data-attachment-url="${url}" data-record-id="${Number(record.id)}" data-attachment-id="${Number(file.id)}" data-filename="${esc(file.file_name)}" data-content-type="${esc(file.content_type || '')}" data-preview-kind="${kind}">${esc(file.file_name)}</a><span class="attachment-meta">${formatFileSize(file.size_bytes)}</span></div><div class="attachment-actions">${previewAction}<button type="button" class="text-button" data-download-attachment data-record-id="${Number(record.id)}" data-attachment-id="${Number(file.id)}" data-filename="${esc(file.file_name)}">下载</button>${deleteAction}</div></li>`;
     }).join('') || '<li class="activity-empty">暂无附件</li>';
     const events = record.events || [{ event_type: 'created', summary: '记录已创建', created_at: record.created_at, actor: record.author_id || '' }];
     $('#activity-list').innerHTML = events.length ? events.map((event) => `<li class="activity-item"><span class="activity-dot"></span><div><b>${esc(event.summary)}</b><small>${event.actor ? `${esc(event.actor)} · ` : ''}${new Date(event.created_at).toLocaleString('zh-CN')}</small></div></li>`).join('') : '<li class="activity-empty">暂无活动记录</li>';
-    const ownsNote = record.kind === 'note' && Boolean(currentUser()) && record.owner_username === currentUser().trim().toLocaleLowerCase();
-    $('#delete-note').hidden = !ownsNote;
-    $('#detail .attachment-upload').classList.toggle('hidden', record.kind === 'note' && !ownsNote);
+    const canDelete = (record.kind === 'note' && ownsNote) || (record.kind === 'issue' && Boolean(currentUser()));
+    const deleteButton = $('#delete-record');
+    deleteButton.hidden = !canDelete;
+    deleteButton.textContent = record.kind === 'note' ? '删除随手记' : record.kind === 'issue' ? '删除问题' : '删除';
+    $('#detail .attachment-upload').classList.toggle('hidden', !canManageAttachments);
     $('#record-editor').classList.add('hidden');
     $('#detail-content').classList.remove('hidden');
-    $('#edit-record').hidden = (record.kind === 'note' && !ownsNote) || (record.kind === 'issue' && record.status === 'resolved');
+    const canEdit = Boolean(currentUser()) && (
+      (record.kind === 'note' && ownsNote)
+      || (record.kind === 'issue' && record.status !== 'resolved')
+    );
+    $('#edit-record').hidden = !canEdit;
     $('#edit-title').value = record.title;
     $('#edit-content').value = record.content;
     $('#edit-project').value = record.project || '';
@@ -610,7 +770,9 @@ $('#status-filter').addEventListener('change', (event) => { state.status = event
   ['notes-project-filter', 'note', 'project'],
   ['notes-work-type-filter', 'note', 'workType'],
 ].forEach(([id, kind, key]) => {
-  $(`#${id}`).addEventListener('change', (event) => {
+  const element = $(`#${id}`);
+  if (!element) return;
+  element.addEventListener('change', (event) => {
     state.filters[kind][key] = event.target.value;
     if (state.kindFilter === kind) loadRecords();
   });
@@ -644,20 +806,51 @@ $('#search').addEventListener('input', (event) => {
 $('#close-detail').addEventListener('click', closeDetail);
 $('#detail-backdrop').addEventListener('click', closeDetail);
   $('#user-switch').addEventListener('click', () => showUserLogin(true));
-$('#user-login-form').addEventListener('submit', (event) => {
+$('#user-login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const username = $('#username-input').value.normalize('NFKC').trim();
   if (!username || username.length > 80 || /[\u0000-\u001f]/.test(username)) return;
   localStorage.setItem('teamai-username', username);
-  updateUserControl();
   state.selected = null;
   closeDetail();
+  await refreshMe();
+  updateUserControl();
   const requestedRecord = new URLSearchParams(location.hash.slice(1)).get('record');
   if (requestedRecord && /^\d+$/.test(requestedRecord)) {
     document.body.classList.add('reader-mode');
     $('#reader-topbar').classList.remove('hidden');
     openDetail(requestedRecord);
   } else load();
+});
+$('#cancel-review')?.addEventListener('click', () => $('#review-editor').classList.add('hidden'));
+$('#publish-knowledge')?.addEventListener('click', async () => {
+  const issueId = $('#review-issue-id').value;
+  const title = $('#review-title').value.trim();
+  const content = $('#review-content').value.trim();
+  if (!issueId || !title || !content) { message('请填写知识标题和正文。', true); return; }
+  const button = $('#publish-knowledge');
+  button.disabled = true;
+  try {
+    await jsonRequest(`/v1/issues/${issueId}/publish-knowledge`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, content, reviewer: currentUser() }),
+    });
+    message('知识已发布。');
+    $('#review-editor').classList.add('hidden');
+    await Promise.all([loadReviewQueue(), loadSummary()]);
+  } catch (error) { message(`发布失败：${error.message}`, true); }
+  finally { button.disabled = false; }
+});
+const syncRetryHandler = typeof createSyncRetryHandler === 'function'
+  ? createSyncRetryHandler({
+    request: jsonRequest,
+    message,
+    refresh: async () => { await refreshSyncStatus(); await loadSummary(); },
+  })
+  : null;
+['#overview-sync-retry', '#sync-retry'].forEach((selector) => {
+  const button = $(selector);
+  if (button && syncRetryHandler) button.addEventListener('click', syncRetryHandler);
 });
 $('#capture-attachment-input').addEventListener('change', (event) => {
   addPendingFiles(event.target.files || []);
@@ -676,17 +869,32 @@ $('#attachment-input').addEventListener('change', async (event) => {
   event.target.value = '';
   await uploadFilesToSelected(files);
 });
-$('#delete-note').addEventListener('click', async () => {
-  if (!state.selected || state.selected.kind !== 'note') return;
-  if (!window.confirm(`确定删除随手记“${displayTitle(state.selected.title)}”及其附件吗？`)) return;
+$('#delete-record').addEventListener('click', async () => {
+  if (!state.selected) return;
+  const kind = state.selected.kind;
+  if (kind !== 'note' && kind !== 'issue') return;
+  if (kind === 'note') {
+    const ownsNote = Boolean(currentUser()) && state.selected.owner_username === currentUser().trim().toLocaleLowerCase();
+    if (!ownsNote) return;
+  } else if (!currentUser()) {
+    return;
+  }
+  const label = kind === 'note' ? '随手记' : '问题';
+  if (!window.confirm(`确定删除${label}“${displayTitle(state.selected.title)}”及其附件吗？此操作不可恢复。`)) return;
   try {
-    await jsonRequest(`/v1/notes/${state.selected.id}`, { method: 'DELETE' });
+    const endpoint = kind === 'note' ? `/v1/notes/${state.selected.id}` : `/v1/issues/${state.selected.id}`;
+    await jsonRequest(endpoint, { method: 'DELETE' });
     const deletedId = state.selected.id;
     closeDetail();
-    message('随手记已删除。');
-    await Promise.all([load(), loadFilterOptions('note')]);
+    message(`${label}已删除。`);
+    await Promise.all([load(), loadFilterOptions(kind)]);
     restoreResultsFocus(String(deletedId));
   } catch (error) { message(`删除失败：${error.message}`, true); }
+});
+$('#detail-meta').addEventListener('click', (event) => {
+  const parent = event.target.closest('[data-open-parent]');
+  if (!parent) return;
+  openDetail(parent.dataset.openParent);
 });
 $('#attachment-list').addEventListener('click', async (event) => {
   const previewButton = event.target.closest('[data-preview-attachment]');
@@ -698,6 +906,17 @@ $('#attachment-list').addEventListener('click', async (event) => {
       fileName: previewButton.dataset.filename,
       contentType: previewButton.dataset.contentType,
     });
+    return;
+  }
+  const deleteButton = event.target.closest('[data-delete-attachment]');
+  if (deleteButton) {
+    event.preventDefault();
+    if (!window.confirm(`确定删除附件“${deleteButton.dataset.filename}”吗？`)) return;
+    try {
+      await jsonRequest(`/v1/records/${deleteButton.dataset.recordId}/attachments/${deleteButton.dataset.attachmentId}`, { method: 'DELETE' });
+      message('附件已删除。');
+      await openDetail(deleteButton.dataset.recordId);
+    } catch (error) { message(`附件删除失败：${error.message}`, true); }
     return;
   }
   const downloadButton = event.target.closest('[data-download-attachment]');
@@ -770,6 +989,7 @@ $('#cancel-edit').addEventListener('click', () => {
 });
 $('#save-edit').addEventListener('click', async () => {
   if (!state.selected) return;
+  if (!currentUser()) { message('请先设置用户名后再编辑。', true); return; }
   const title = $('#edit-title').value.trim();
   const content = $('#edit-content').value.trim();
   if (!title || !content) { message('标题和正文不能为空。', true); return; }
@@ -777,12 +997,15 @@ $('#save-edit').addEventListener('click', async () => {
   const button = $('#save-edit');
   button.disabled = true;
   try {
+    const userTags = (state.selected.tags || []).filter((tag) => !String(tag).startsWith('source::') && !String(tag).startsWith('type::'));
     const record = await jsonRequest(`/v1/records/${state.selected.id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         expected_updated_at: state.selected.updated_at,
         title, content, project: $('#edit-project').value.trim(),
         work_type: $('#edit-work-type').value,
+        tags: userTags,
+        tech_stack: state.selected.tech_stack || [],
         ...(state.selected.kind === 'note' ? { visibility: $('#edit-visibility').value } : {}),
       }),
     });
@@ -849,7 +1072,8 @@ async function updateSelected(path) {
   try {
     const record = await jsonRequest(`/v1/issues/${state.selected.id}/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ solution, source: 'web', ...(path === 'resolve' ? { verification } : {}) }) });
     const pending = record.sync_error === 'GitLab synchronization pending';
-    message(record.sync_error ? (pending ? '本地已更新；GitLab 同步正在排队。' : `本地已更新；GitLab 同步失败：${record.sync_error}`) : '记录已更新。', Boolean(record.sync_error && !pending));
+    const okText = path === 'resolve' ? '问题已解决。' : '记录已更新。';
+    message(record.sync_error ? (pending ? `${okText} GitLab 同步正在排队。` : `${okText} GitLab 同步失败：${record.sync_error}`) : okText, Boolean(record.sync_error && !pending));
     await openDetail(state.selected.id);
     await load();
   } catch (error) {
@@ -878,11 +1102,12 @@ document.addEventListener('keydown', (event) => {
 });
 renderPendingAttachments();
 updateUserControl();
+applyAdminVisibility();
 const readerRecordId = new URLSearchParams(location.hash.slice(1)).get('record');
 if (currentUser()) {
   if (readerRecordId && /^\d+$/.test(readerRecordId)) {
     document.body.classList.add('reader-mode');
     $('#reader-topbar').classList.remove('hidden');
-    openDetail(readerRecordId);
+    refreshMe().then(() => { updateUserControl(); openDetail(readerRecordId); });
   } else load();
 } else showUserLogin();

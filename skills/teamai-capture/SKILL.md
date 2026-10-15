@@ -1,6 +1,6 @@
 ---
 name: teamai-capture
-description: Search and capture team issues, then curate verified knowledge for explicit human review in TeamAI Issue Hub through MCP.
+description: Search and capture team issues and notes in TeamAI Issue Hub through MCP. Verified resolves auto-publish team knowledge.
 ---
 
 # TeamAI Capture
@@ -48,14 +48,11 @@ Use this structure for issues:
 ## 验证结果
 ```
 
-Use `teamai_append_solution` for an intermediate finding. A verified experience should be attached to its source issue; use `teamai_resolve` only after the reporter says the fix was verified, and include how it was verified. If there is no existing issue, create one with the known context, then resolve it with the verification evidence so it enters the review queue.
+Use `teamai_append_solution` (with `username`) for an intermediate finding. A verified experience should be attached to its source issue; use `teamai_resolve` only after the reporter says the fix was verified, and include how it was verified. If there is no existing issue, create one with the known context, then resolve it with the verification evidence. **Resolving auto-publishes team knowledge** from the issue content—no separate approval step.
 
-## Promote a resolved issue into team knowledge
+## Knowledge publishing
 
-- Resolving an issue only puts it into the knowledge review queue. It does not publish it as reusable team knowledge.
-- Before resolving an issue, obtain the resolver's display name if it is not already available. Pass it as `username` to `teamai_resolve`; Web uses the currently selected username automatically, and CLI uses `TEAMAI_USER` or `--username`. The name is self-reported and is recorded in the issue activity history, not authenticated.
-- Suggest promotion only when the cause and fix are repeatable, useful beyond one person/session, and supported by verification evidence.
-- Draft a standalone knowledge article with symptoms, scope/project, stack/version, cause, fix, validation, and caveats. Keep credentials and unrelated private context out.
-- Show the proposed title and full article, identify the source issue, and obtain explicit human approval before calling `teamai_publish_knowledge`.
-- Never approve on behalf of the user, infer approval from “resolve this”, or publish automatically. If there is no approval, leave the issue in the pending review queue.
-- In local development, provide the reviewer audit label. In production, the API requires a trusted proxy identity in the configured approver group. If MCP lacks that identity and publication is denied, direct the user to the authenticated Web review panel; never retry through an untrusted/shared identity.
+- Before resolving, obtain the resolver's display name if needed. Pass it as `username` to `teamai_resolve`. The name is self-reported and recorded in activity history, not authenticated.
+- After resolve, search `kind: "knowledge"` to confirm the article. Reopening hides knowledge until the issue is resolved again (auto-republish).
+- `teamai_knowledge_candidates` / `teamai_publish_knowledge` are **admin-only** leftovers for rare manual curation. Do not use them in the normal resolve flow.
+- Notes: `teamai_update_note` / `teamai_delete_note` require the owner username. Issues: `teamai_reopen_issue` / `teamai_delete_issue` require username.

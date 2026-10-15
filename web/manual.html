@@ -49,8 +49,8 @@
     <div class="section-heading"><h2 id="features-title">工作台能做什么</h2><p>三个入口，覆盖日常协作</p></div>
     <div class="feature-grid">
       <article class="feature"><div class="feature-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><h3>总览</h3></div><p>查看问题状态、最近更新和快捷操作。点击统计卡片可进入对应问题列表。</p></article>
-      <article class="feature"><div class="feature-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span><h3>问题</h3></div><p>按状态、项目和工作类型查找；在详情里补充处理方案，验证后标记已解决。</p></article>
-      <article class="feature"><div class="feature-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="m16.5 3.5 4 4L7 21l-4 1 1-4Z"/></svg></span><h3>随手记</h3></div><p>记录想法、资料和待办。按项目、工作类型、可见范围筛选；创建者可编辑、删除及添加附件。</p></article>
+      <article class="feature"><div class="feature-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span><h3>问题</h3></div><p>按状态、项目和工作类型查找；详情里可编辑、删除或标记已解决。已解决的问题可在问题页用「已解决」筛选查看。</p></article>
+      <article class="feature"><div class="feature-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="m16.5 3.5 4 4L7 21l-4 1 1-4Z"/></svg></span><h3>管理功能</h3></div><p>管理员（TEAMAI_ADMIN_USERS）可使用知识审核遗留队列、GitLab 同步重试和用户管理。</p></article>
     </div>
   </section>
 
@@ -58,17 +58,23 @@
     <div class="section-heading"><h2 id="start-title">怎么开始使用</h2><p>选择顺手的入口</p></div>
     <div class="use-row">
       <article class="use-card"><h3>Web 工作台</h3><div class="steps"><div class="step"><i class="number">1</i><strong>输入用户名</strong><span>首次进入时设置，浏览器会记住</span></div><div class="step"><i class="number">2</i><strong>新建记录</strong><span>选择问题或随手记，填写项目和类型</span></div><div class="step"><i class="number">3</i><strong>搜索与处理</strong><span>打开详情，更新内容或添加文件</span></div></div></article>
-      <article class="use-card"><h3>AI 助手 / CLI</h3><div class="cli"><div class="cli-head"><i></i><i></i><i></i><span style="margin-left:6px">命令行示例</span></div><pre><code><span class="comment"># 配置常用用户名</span>
+      <article class="use-card"><h3>AI 助手 / CLI</h3><div class="cli"><div class="cli-head"><i></i><i></i><i></i><span style="margin-left:6px">命令行示例</span></div><pre><code><span class="comment"># 配置常用用户名与 Issue Hub 地址</span>
 $env:TEAMAI_USER="alice"
+$env:TEAMAI_API="http://10.110.66.11:8787"
 
 python teamai_cli.py note "记录内容" `
   --project demo --work-type 工作日常 `
   --visibility private
+<span class="comment"># 保存后 stderr 会提示 Issue Hub 查看地址与 #record=… 深链</span>
 
 python teamai_cli.py notes list --project demo
 python teamai_cli.py notes get 12
 python teamai_cli.py notes update 12 --title "新标题"
-python teamai_cli.py notes delete 12</code></pre></div></article>
+python teamai_cli.py notes delete 12
+
+python teamai_cli.py issue "部署失败：镜像拉取超时" --project demo --work-type 模型部署
+python teamai_cli.py issues update 12 --title "新标题" --content "更新后的正文"
+python teamai_cli.py issues get 12</code></pre></div></article>
     </div>
   </section>
 

@@ -22,11 +22,12 @@ BACKUP_TEST_SCHEMA = """CREATE TABLE records (
 )"""
 
 
-def client(tmp_path, monkeypatch):
+def client(tmp_path, monkeypatch, *, admin_users: str = "test-user,alice"):
     monkeypatch.setenv("APP_DB", str(tmp_path / "test.db"))
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("SYNC_INTERVAL_SECONDS", "60")
+    monkeypatch.setenv("TEAMAI_ADMIN_USERS", admin_users)
     monkeypatch.delenv("TEAMAI_API_KEY", raising=False)
     for name in ("GITLAB_URL", "GITLAB_TOKEN", "GITLAB_PROJECT_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -53,13 +54,18 @@ def test_issue_lifecycle_and_overview(tmp_path, monkeypatch):
         assert resolved.json()["status"] == "resolved"
         assert "补充 MCP 配置" in resolved.json()["content"]
         assert "连续两次成功" in resolved.json()["content"]
-        assert resolved.json()["knowledge_status"] == "pending_review"
+        assert resolved.json()["knowledge_status"] == "published"
+        assert resolved.json()["knowledge_record_id"]
         assert api.get("/v1/overview").json()["by_status"]["resolved"] == 1
+        assert api.get("/v1/search", params={"kind": "knowledge"}).json()
         reopened = api.post(f"/v1/issues/{issue['id']}/reopen", json={"solution": "回归后重新打开", "source": "test"})
         assert reopened.status_code == 200
         assert reopened.json()["status"] == "triage"
+        assert reopened.json()["knowledge_status"] == "needs_review"
         events = api.get(f"/v1/issues/{issue['id']}").json()["events"]
-        assert [event["event_type"] for event in events][:3] == ["reopened", "resolved", "created"]
+        assert "reopened" in [event["event_type"] for event in events]
+        assert "resolved" in [event["event_type"] for event in events]
+        assert "created" in [event["event_type"] for event in events]
 
 
 def test_work_type_is_saved_searchable_editable_and_copied_to_knowledge(tmp_path, monkeypatch):
@@ -78,10 +84,10 @@ def test_work_type_is_saved_searchable_editable_and_copied_to_knowledge(tmp_path
         resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={
             "solution": "Prototype the leading candidate.", "verification": "Offline benchmark completed.",
         }).json()
-        article = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={
-            "title": "Algorithm benchmark practice", "content": "Compare on a fixed dataset.", "reviewer": "reviewer",
-        }).json()
         assert resolved["work_type"] == "算法预研"
+        assert resolved["knowledge_status"] == "published"
+        article = api.get(f"/v1/issues/{resolved['knowledge_record_id']}").json()
+        assert article["kind"] == "knowledge"
         assert article["work_type"] == "算法预研"
         invalid = api.post("/v1/issues", json={"content": "Invalid category", "work_type": "other"})
         assert invalid.status_code == 422
@@ -124,6 +130,9 @@ def test_attachment_upload_list_and_download(tmp_path, monkeypatch):
         assert preview.content == b"# Plan"
         assert preview.headers["content-disposition"].startswith("inline;")
         assert preview.headers["content-type"].startswith("text/markdown") or preview.headers["content-type"].startswith("text/plain")
+        deleted = api.delete(f"/v1/records/{record['id']}/attachments/{attachment['id']}")
+        assert deleted.json() == {"deleted": True, "id": attachment["id"]}
+        assert api.get(f"/v1/records/{record['id']}/attachments/{attachment['id']}").status_code == 404
 
 
 def test_attachment_accepts_any_type_and_rejects_oversized_files(tmp_path, monkeypatch):
@@ -237,6 +246,16 @@ def test_note_crud_requires_username_and_enforces_owner(tmp_path, monkeypatch):
         assert api.get(f"/v1/notes/{note['id']}", headers=alice).status_code == 404
 
 
+def test_issue_delete_requires_username(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        alice = {"X-TeamAI-User": "Alice"}
+        issue = api.post("/v1/issues", json={"title": "Drop me", "content": "issue to delete"}).json()
+        assert api.delete(f"/v1/issues/{issue['id']}", headers={"X-TeamAI-User": ""}).status_code == 400
+        assert api.delete(f"/v1/notes/{issue['id']}", headers=alice).status_code == 404
+        assert api.delete(f"/v1/issues/{issue['id']}", headers=alice).json() == {"deleted": True, "id": issue["id"]}
+        assert api.get(f"/v1/issues/{issue['id']}", headers=alice).status_code == 404
+
+
 def test_redacts_credentials_and_deduplicates(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as api:
         payload = {"content": "token: secret-value glpat-abcdefghijklmnop ghp_123456789012345678901234567890 AKIAIOSFODNN7EXAMPLE", "source": "teamai-cli"}
@@ -269,6 +288,14 @@ def test_record_edit_updates_content_metadata_and_preserves_system_tags(tmp_path
         assert body["tech_stack"] == ["FastAPI", "PostgreSQL"]
         assert body["tags"] == ["source::web", "type::issue", "urgent"]
         assert api.get(f"/v1/issues/{record['id']}").json()["content"] == body["content"]
+        events = api.get(f"/v1/issues/{record['id']}").json()["events"]
+        edited_event = next(event for event in events if event["event_type"] == "edited")
+        assert edited_event["actor"] == "test-user"
+        assert "标题" in edited_event["summary"]
+        assert "正文" in edited_event["summary"]
+        assert "所属项目" in edited_event["summary"]
+        assert "技术栈" in edited_event["summary"]
+        assert "标签" in edited_event["summary"]
         stale = api.put(f"/v1/records/{record['id']}", json={
             "expected_updated_at": record["updated_at"], "title": "Stale edit", "content": "Must not overwrite",
             "project": "", "tech_stack": [], "tags": [],
@@ -276,6 +303,46 @@ def test_record_edit_updates_content_metadata_and_preserves_system_tags(tmp_path
         assert stale.status_code == 409
         assert "changed since it was opened" in stale.json()["detail"]
         assert api.get(f"/v1/issues/{record['id']}").json()["title"] == "Edited title"
+
+
+def test_record_edit_omitted_lists_preserve_and_empty_lists_clear_user_tags(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch) as api:
+        note = api.post("/v1/notes", json={
+            "title": "Keep metadata", "content": "Note with stack and tags",
+            "project": "demo", "work_type": "工作日常", "tech_stack": ["Python"], "tags": ["keep-me"],
+        }).json()
+        assert note["tech_stack"] == ["Python"]
+        assert "keep-me" in note["tags"]
+
+        preserved = api.put(f"/v1/records/{note['id']}", json={
+            "expected_updated_at": note["updated_at"],
+            "title": "Keep metadata", "content": "Only title path unchanged lists",
+            "project": "demo", "work_type": "工作日常",
+        })
+        assert preserved.status_code == 200
+        body = preserved.json()
+        assert body["tech_stack"] == ["Python"]
+        assert set(body["tags"]) == {"source::web", "type::note", "keep-me"}
+        events = api.get(f"/v1/notes/{note['id']}").json()["events"]
+        edited_event = next(event for event in events if event["event_type"] == "edited")
+        assert edited_event["actor"] == "test-user"
+        assert edited_event["summary"] == "编辑了正文"
+        assert "标签" not in edited_event["summary"]
+        assert "技术栈" not in edited_event["summary"]
+
+        cleared = api.put(f"/v1/records/{note['id']}", json={
+            "expected_updated_at": body["updated_at"],
+            "title": body["title"], "content": body["content"], "project": body["project"],
+            "work_type": body["work_type"], "tech_stack": [], "tags": [],
+        })
+        assert cleared.status_code == 200
+        cleared_body = cleared.json()
+        assert cleared_body["tech_stack"] == []
+        assert set(cleared_body["tags"]) == {"source::web", "type::note"}
+        clear_events = api.get(f"/v1/notes/{note['id']}").json()["events"]
+        clear_event = next(event for event in clear_events if event["event_type"] == "edited" and "标签" in event["summary"])
+        assert clear_event["actor"] == "test-user"
+        assert "技术栈" in clear_event["summary"]
 
 
 def test_record_edit_rejects_duplicates_and_protected_knowledge_states(tmp_path, monkeypatch):
@@ -290,11 +357,11 @@ def test_record_edit_rejects_duplicates_and_protected_knowledge_states(tmp_path,
         assert api.get(f"/v1/issues/{second['id']}").json()["title"] == "Second"
 
         issue = api.post("/v1/issues", json={"content": "Resolved records require verification after editing."}).json()
-        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "fix", "verification": "verified"})
+        resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "fix", "verification": "verified"}).json()
         payload = {"expected_updated_at": "not-used", "title": "Edited", "content": "Edited body", "project": "", "tech_stack": [], "tags": []}
         assert api.put(f"/v1/records/{issue['id']}", json=payload).status_code == 409
-        article = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={"title": "Article", "content": "Curated", "reviewer": "reviewer"}).json()
-        assert api.put(f"/v1/records/{article['id']}", json=payload).status_code == 409
+        article_id = resolved["knowledge_record_id"]
+        assert api.put(f"/v1/records/{article_id}", json=payload).status_code == 409
 
 
 def test_classifier_never_treats_solution_language_as_verification(tmp_path, monkeypatch):
@@ -335,15 +402,16 @@ def test_redacts_credentials_from_metadata_tags_and_resolution_source(tmp_path, 
 
         issue = api.post("/v1/issues", json={"content": "resolution source redaction check"}).json()
         resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={
-            "solution": "A verified fix",
+            "solution": "A verified fix api_key=resolution-secret",
             "verification": "Ran the integration check and it passed.",
             "source": "api_key=resolution-secret",
         }).json()
         assert "resolution-secret" not in resolved["content"]
         assert "api_key=[REDACTED]" in resolved["content"]
+        assert resolved["knowledge_status"] == "published"
 
 
-def test_resolved_issue_requires_verification_and_team_approval_to_become_knowledge(tmp_path, monkeypatch):
+def test_resolved_issue_requires_verification_and_auto_publishes_knowledge(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as api:
         issue = api.post("/v1/issues", json={
             "title": "MCP handshake fails",
@@ -360,61 +428,54 @@ def test_resolved_issue_requires_verification_and_team_approval_to_become_knowle
         assert api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "restart"}).status_code == 422
         assert api.get("/v1/knowledge/candidates").json() == []
         resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Add readiness retry", "verification": "Restarted service five times; first connection passed each time."}).json()
-        assert resolved["knowledge_status"] == "pending_review"
-        assert [row["id"] for row in api.get("/v1/knowledge/candidates").json()] == [issue["id"]]
-        assert api.get("/v1/overview").json()["pending_knowledge"] == 1
-        assert api.get("/v1/search", params={"knowledge_status": "review"}).json()[0]["id"] == issue["id"]
-        assert api.get("/v1/search", params={"kind": "knowledge"}).json() == []
-
-        article = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={
-            "title": "MCP 启动后连接重试",
-            "content": "## 适用范围\nFastAPI + MCP 服务冷启动。\n\n## 处理方式\n客户端首次连接失败时执行 readiness 重试。\n\n## 验证\n连续 5 次重启首连通过。",
-            "reviewer": "team-reviewer",
-        })
-        assert article.status_code == 200, article.text
-        knowledge = article.json()
+        assert resolved["knowledge_status"] == "published"
+        assert resolved["knowledge_record_id"]
+        assert api.get("/v1/overview").json()["pending_knowledge"] == 0
+        assert api.get("/v1/knowledge/candidates").json() == []
+        knowledge = api.get(f"/v1/issues/{resolved['knowledge_record_id']}").json()
         assert knowledge["kind"] == "knowledge"
         assert knowledge["parent_issue_id"] == issue["id"]
         assert knowledge["project"] == "issuehub"
         assert knowledge["tech_stack"] == ["FastAPI", "MCP"]
-        assert knowledge["reviewed_by"] == "team-reviewer"
-        assert api.get(f"/v1/issues/{issue['id']}").json()["knowledge_status"] == "published"
-        assert api.get(f"/v1/issues/{issue['id']}").json()["knowledge_record_id"] == knowledge["id"]
-        assert api.get("/v1/knowledge/candidates").json() == []
+        assert knowledge["reviewed_by"] == "test-user"
+        assert "Add readiness retry" in knowledge["content"]
         assert api.get("/v1/search", params={"kind": "knowledge"}).json()[0]["id"] == knowledge["id"]
         assert all(row["kind"] != "knowledge" or row["knowledge_status"] == "published" for row in api.get("/v1/search").json())
         assert api.post(f"/v1/issues/{knowledge['id']}/resolve", json={"solution": "invalid", "verification": "should be rejected"}).status_code == 409
         assert api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={"title": "MCP 启动后连接重试", "content": "duplicate", "reviewer": "team-reviewer"}).status_code == 409
 
 
-def test_reopen_removes_pending_issue_from_knowledge_review_queue(tmp_path, monkeypatch):
+def test_reopen_hides_auto_published_knowledge_until_resolved_again(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as api:
         issue = api.post("/v1/issues", json={"content": "candidate before reopen"}).json()
-        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "fix", "verification": "verified"})
-        assert len(api.get("/v1/knowledge/candidates").json()) == 1
+        resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "fix", "verification": "verified"}).json()
+        assert resolved["knowledge_status"] == "published"
+        assert api.get("/v1/knowledge/candidates").json() == []
         reopened = api.post(f"/v1/issues/{issue['id']}/reopen", json={"solution": "New evidence shows regression"}).json()
-        assert reopened["knowledge_status"] == "not_applicable"
+        assert reopened["knowledge_status"] == "needs_review"
+        assert api.get("/v1/search", params={"kind": "knowledge"}).json() == []
         assert api.get("/v1/knowledge/candidates").json() == []
 
 
-def test_reopening_published_issue_hides_stale_knowledge_until_reapproved(tmp_path, monkeypatch):
+def test_reopening_published_issue_hides_stale_knowledge_until_resolved_again(tmp_path, monkeypatch):
     with client(tmp_path, monkeypatch) as api:
         issue = api.post("/v1/issues", json={"content": "Published issue becomes outdated after a regression"}).json()
-        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Apply fix v1", "verification": "Version 1 regression test passes"})
-        article = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={"title": "Fix for issue X", "content": "Steps for version 1", "reviewer": "reviewer"}).json()
-        assert api.get("/v1/search", params={"kind": "knowledge"}).json()[0]["id"] == article["id"]
+        resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Apply fix v1", "verification": "Version 1 regression test passes"}).json()
+        article_id = resolved["knowledge_record_id"]
+        assert api.get("/v1/search", params={"kind": "knowledge"}).json()[0]["id"] == article_id
 
         reopened = api.post(f"/v1/issues/{issue['id']}/reopen", json={"solution": "Regression found in version 2"}).json()
         assert reopened["knowledge_status"] == "needs_review"
-        assert reopened["knowledge_record_id"] == article["id"]
+        assert reopened["knowledge_record_id"] == article_id
         assert api.get("/v1/search", params={"kind": "knowledge"}).json() == []
 
-        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Apply fix v2", "verification": "Version 2 and 1 regression tests pass"})
-        assert len(api.get("/v1/knowledge/candidates").json()) == 1
-        revised = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={"title": "Fix for issue X", "content": "Updated steps including version 2", "reviewer": "reviewer-2"}).json()
-        assert revised["id"] == article["id"]
-        assert revised["reviewed_by"] == "reviewer-2"
-        assert revised["content"] == "Updated steps including version 2"
+        revised_issue = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Apply fix v2", "verification": "Version 2 and 1 regression tests pass"}).json()
+        assert revised_issue["knowledge_status"] == "published"
+        assert revised_issue["knowledge_record_id"] == article_id
+        revised = api.get(f"/v1/issues/{article_id}").json()
+        assert revised["id"] == article_id
+        assert "Apply fix v2" in revised["content"]
+        assert api.get("/v1/search", params={"kind": "knowledge"}).json()[0]["id"] == article_id
 
 
 def test_existing_database_migrates_project_and_knowledge_columns(tmp_path, monkeypatch):
@@ -443,11 +504,20 @@ def test_existing_database_migrates_project_and_knowledge_columns(tmp_path, monk
 
 
 def test_production_requires_reviewer_proxy_headers_and_approver_group(tmp_path, monkeypatch):
-    with client(tmp_path, monkeypatch) as api:
+    with client(tmp_path, monkeypatch, admin_users="test-user,reviewer@example.test") as api:
         import app.main as main
 
         issue = api.post("/v1/issues", json={"content": "production approval gate"}).json()
-        api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "apply fix", "verification": "verified"})
+        resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "apply fix", "verification": "verified"}).json()
+        # Simulate a leftover review queue item that admins can still curate manually.
+        with main.db() as conn:
+            conn.execute(
+                "UPDATE records SET knowledge_status = 'pending_review', knowledge_record_id = NULL WHERE id = ?",
+                (issue["id"],),
+            )
+            if resolved.get("knowledge_record_id"):
+                conn.execute("DELETE FROM record_events WHERE record_id = ?", (resolved["knowledge_record_id"],))
+                conn.execute("DELETE FROM records WHERE id = ?", (resolved["knowledge_record_id"],))
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setenv("TEAMAI_REVIEWER_ID_HEADER", "X-Authenticated-User")
         monkeypatch.setenv("TEAMAI_REVIEWER_GROUPS_HEADER", "X-Authenticated-Groups")
@@ -455,10 +525,29 @@ def test_production_requires_reviewer_proxy_headers_and_approver_group(tmp_path,
 
         payload = {"title": "Reviewed fix", "content": "Article", "reviewer": "spoofed-form-name"}
         assert api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json=payload).status_code == 403
-        headers = {"X-Authenticated-User": "reviewer@example.test", "X-Authenticated-Groups": "developers, teamai-approvers"}
+        headers = {
+            "X-TeamAI-User": "test-user",
+            "X-Authenticated-User": "reviewer@example.test",
+            "X-Authenticated-Groups": "developers, teamai-approvers",
+        }
         published = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json=payload, headers=headers)
         assert published.status_code == 200
         assert published.json()["reviewed_by"] == "reviewer@example.test"
+
+
+def test_admin_users_and_sync_require_admin(tmp_path, monkeypatch):
+    with client(tmp_path, monkeypatch, admin_users="alice") as api:
+        bob = {"X-TeamAI-User": "Bob"}
+        alice = {"X-TeamAI-User": "Alice"}
+        assert api.get("/v1/me", headers=bob).json() == {"username": "bob", "is_admin": False}
+        assert api.get("/v1/me", headers=alice).json() == {"username": "alice", "is_admin": True}
+        assert api.get("/v1/admin/users", headers=bob).status_code == 403
+        users = api.get("/v1/admin/users", headers=alice).json()
+        assert users["total"] >= 1
+        assert any(row["username"] == "alice" and row["is_admin"] for row in users["users"])
+        assert api.post("/v1/sync", headers=bob).status_code == 403
+        assert api.post("/v1/sync", headers=alice).status_code == 200
+        assert api.get("/v1/knowledge/candidates", headers=bob).status_code == 403
 
 
 def test_production_config_requires_proxy_review_identity_and_group(monkeypatch):

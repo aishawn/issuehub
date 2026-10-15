@@ -34,6 +34,7 @@ def postgres_api(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_DB", str(tmp_path / "unused.db"))
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("SYNC_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("TEAMAI_ADMIN_USERS", "test-user")
     monkeypatch.delenv("TEAMAI_API_KEY", raising=False)
     for name in ("GITLAB_URL", "GITLAB_TOKEN", "GITLAB_PROJECT_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -41,7 +42,7 @@ def postgres_api(tmp_path, monkeypatch):
     import app.main as main
     importlib.reload(main)
     try:
-        with TestClient(main.app) as client:
+        with TestClient(main.app, headers={"X-TeamAI-User": "test-user"}) as client:
             yield client
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -66,30 +67,25 @@ def test_postgres_issue_to_reviewed_knowledge_lifecycle(postgres_api):
         "solution": "Wait for database readiness before connecting.",
         "verification": "Repeated five cold starts; first request succeeded each time.",
     }).json()
-    assert resolved["knowledge_status"] == "pending_review"
-    article = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={
-        "title": "Handle PostgreSQL cold starts",
-        "content": "Wait for readiness before opening the application connection.",
-        "reviewer": "postgres-integration-reviewer",
-    }).json()
+    assert resolved["knowledge_status"] == "published"
+    article_id = resolved["knowledge_record_id"]
+    article = api.get(f"/v1/issues/{article_id}").json()
     assert article["kind"] == "knowledge"
     assert article["parent_issue_id"] == issue["id"]
-    assert api.get("/v1/search", params={"kind": "knowledge"}).json()[0]["id"] == article["id"]
+    assert api.get("/v1/search", params={"kind": "knowledge"}).json()[0]["id"] == article_id
 
     stale = api.post(f"/v1/issues/{issue['id']}/reopen", json={"solution": "A regression was found."}).json()
     assert stale["knowledge_status"] == "needs_review"
     assert api.get("/v1/search", params={"kind": "knowledge"}).json() == []
-    api.post(f"/v1/issues/{issue['id']}/resolve", json={
+    revised_issue = api.post(f"/v1/issues/{issue['id']}/resolve", json={
         "solution": "Apply the corrected readiness check.",
         "verification": "Repeated five cold starts after the correction; all passed.",
-    })
-    revised = api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={
-        "title": "Handle PostgreSQL cold starts",
-        "content": "Use the corrected readiness check before opening the connection.",
-        "reviewer": "postgres-integration-reviewer-2",
     }).json()
-    assert revised["id"] == article["id"]
-    assert revised["reviewed_by"] == "postgres-integration-reviewer-2"
+    assert revised_issue["knowledge_status"] == "published"
+    assert revised_issue["knowledge_record_id"] == article_id
+    revised = api.get(f"/v1/issues/{article_id}").json()
+    assert revised["id"] == article_id
+    assert "corrected readiness check" in revised["content"]
 
 
 def test_postgres_concurrent_issue_updates_keep_both_solutions(postgres_api):
@@ -109,8 +105,18 @@ def test_postgres_concurrent_issue_updates_keep_both_solutions(postgres_api):
 
 def test_postgres_concurrent_knowledge_publish_creates_one_article(postgres_api):
     api = postgres_api
+    import app.main as main
+
     issue = api.post("/v1/issues", json={"content": "Only one article may be published for this issue."}).json()
-    api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Apply stable fix.", "verification": "Passed five times."})
+    resolved = api.post(f"/v1/issues/{issue['id']}/resolve", json={"solution": "Apply stable fix.", "verification": "Passed five times."}).json()
+    with main.db() as conn:
+        conn.execute(
+            "UPDATE records SET knowledge_status = 'pending_review', knowledge_record_id = NULL WHERE id = ?",
+            (issue["id"],),
+        )
+        if resolved.get("knowledge_record_id"):
+            conn.execute("DELETE FROM record_events WHERE record_id = ?", (resolved["knowledge_record_id"],))
+            conn.execute("DELETE FROM records WHERE id = ?", (resolved["knowledge_record_id"],))
 
     def publish(reviewer):
         return api.post(f"/v1/issues/{issue['id']}/publish-knowledge", json={

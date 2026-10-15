@@ -245,6 +245,7 @@ def test_cli_and_mcp_create_records_through_authenticated_api(tmp_path, monkeypa
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("SYNC_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("TEAMAI_API_KEY", "integration-test-key-0123456789")
+    monkeypatch.setenv("TEAMAI_ADMIN_USERS", "integration-cli")
     for name in ("GITLAB_URL", "GITLAB_TOKEN", "GITLAB_PROJECT_ID"):
         monkeypatch.delenv(name, raising=False)
     import app.main as main
@@ -264,6 +265,7 @@ def test_cli_and_mcp_create_records_through_authenticated_api(tmp_path, monkeypa
     child_env["TEAMAI_API"] = api_url
     child_env["TEAMAI_API_KEY"] = "integration-test-key-0123456789"
     child_env["TEAMAI_USER"] = "integration-cli"
+    child_env["TEAMAI_ADMIN_USERS"] = "integration-cli"
     try:
         deadline = time.monotonic() + 5
         while not server.started and server_thread.is_alive() and time.monotonic() < deadline:
@@ -327,24 +329,24 @@ def test_cli_and_mcp_create_records_through_authenticated_api(tmp_path, monkeypa
         assert "Start the service against a cold database" in solution_note["content"]
 
         resolved = run_mcp_tool(2, "teamai_resolve", {
-            "id": mcp_record["id"], "solution": "Configure readiness retry", "verification": "Restarted five times; first request succeeded each time.",
+            "id": mcp_record["id"],
+            "solution": "Configure readiness retry",
+            "verification": "Restarted five times; first request succeeded each time.",
+            "username": "integration-cli",
         })
-        assert resolved["knowledge_status"] == "pending_review"
+        assert resolved["knowledge_status"] == "published"
+        assert resolved["knowledge_record_id"]
+        knowledge = run_mcp_tool(3, "teamai_get_issue", {"id": resolved["knowledge_record_id"], "username": "integration-cli"})
+        assert knowledge["kind"] == "knowledge"
+        assert knowledge["parent_issue_id"] == mcp_record["id"]
+        assert knowledge["reviewed_by"] == "integration-cli"
 
         candidates = subprocess.run(
-            [sys.executable, "teamai_cli.py", "knowledge", "candidates"],
+            [sys.executable, "teamai_cli.py", "knowledge", "candidates", "--username", "integration-cli"],
             cwd=project_root, env=child_env, capture_output=True, text=True, timeout=10,
         )
         assert candidates.returncode == 0, candidates.stderr
-        assert json.loads(candidates.stdout)[0]["id"] == mcp_record["id"]
-
-        knowledge = run_mcp_tool(3, "teamai_publish_knowledge", {
-            "id": mcp_record["id"], "title": "MCP startup connection retry",
-            "content": "Wait for readiness, then retry. Verified across five restarts.", "reviewer": "integration-reviewer",
-        })
-        assert knowledge["kind"] == "knowledge"
-        assert knowledge["parent_issue_id"] == mcp_record["id"]
-        assert knowledge["reviewed_by"] == "integration-reviewer"
+        assert json.loads(candidates.stdout) == []
 
         with main.db() as conn:
             assert conn.execute("SELECT COUNT(*) FROM records").fetchone()[0] == 4

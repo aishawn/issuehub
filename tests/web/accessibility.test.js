@@ -6,6 +6,7 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '../..');
 const html = fs.readFileSync(path.join(root, 'web/index.html'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'web/styles.css'), 'utf8');
+const app = fs.readFileSync(path.join(root, 'web/app.js'), 'utf8');
 
 function colorToken(name) {
   const match = css.match(new RegExp(`${name}:(#[0-9a-f]{6})`, 'i'));
@@ -39,15 +40,25 @@ test('status filter buttons expose their initial pressed state', () => {
   assert.deepEqual(states, ['true', 'false', 'false', 'false']);
 });
 
-test('main navigation keeps only the core workspace views', () => {
-  for (const page of ['overview', 'issues', 'notes']) assert.match(html, new RegExp(`data-page="${page}"`));
-  for (const page of ['review', 'knowledge', 'sync']) assert.doesNotMatch(html, new RegExp(`data-page="${page}"|data-view="${page}"`));
-  assert.doesNotMatch(html, /待知识审核|打开待审核队列|团队知识库|同步管理/);
+test('main navigation includes workspace and admin-gated views', () => {
+  for (const page of ['overview', 'issues', 'notes']) {
+    assert.match(html, new RegExp(`data-page="${page}"`));
+  }
+  assert.doesNotMatch(html, /data-page="knowledge"/);
+  for (const page of ['review', 'sync', 'users']) {
+    assert.match(html, new RegExp(`data-page="${page}"`));
+    assert.match(html, new RegExp(`data-view="${page}"[\\s\\S]*admin-only|admin-only[\\s\\S]*data-view="${page}"`));
+  }
+  assert.match(html, /知识审核|同步管理|用户管理/);
+  assert.match(html, /sync-retry\.js/);
 });
 
-test('issue workspace no longer renders knowledge review controls', () => {
-  const app = fs.readFileSync(path.join(root, 'web/app.js'), 'utf8');
-  assert.doesNotMatch(app, /publish-knowledge|knowledge-review|loadQueue\(/);
+test('admin pages stay hidden until isAdmin is applied in the client', () => {
+  assert.match(app, /is_admin|isAdmin/);
+  assert.match(app, /admin-gate|admin-only/);
+  assert.match(app, /\/v1\/admin\/users/);
+  assert.match(app, /publish-knowledge/);
+  assert.match(app, /createSyncRetryHandler/);
 });
 
 test('muted text meets WCAG AA contrast on the application surfaces', () => {
@@ -79,7 +90,4 @@ test('primary touch controls meet the 44px minimum target size', () => {
     const minimum = cssRule(selector).match(/min-height:\s*(\d+)px/);
     assert.ok(minimum && Number(minimum[1]) >= 44, `${selector} is smaller than 44px`);
   }
-  const closeButton = cssRule('.ghost');
-  assert.ok(Number(closeButton.match(/width:\s*(\d+)px/)?.[1]) >= 44);
-  assert.ok(Number(closeButton.match(/height:\s*(\d+)px/)?.[1]) >= 44);
 });

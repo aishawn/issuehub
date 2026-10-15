@@ -22,24 +22,55 @@ API = os.getenv("TEAMAI_API", "http://127.0.0.1:8787").strip().rstrip("/")
 API_KEY = os.getenv("TEAMAI_API_KEY", "").strip()
 
 
-def validate_api_url() -> None:
+def _is_valid_base_url(value: str) -> bool:
     try:
-        parsed = urllib.parse.urlsplit(API)
+        parsed = urllib.parse.urlsplit(value)
         hostname = parsed.hostname
         port = parsed.port
-    except ValueError as exc:
-        raise TeamAIRequestError("Invalid TEAMAI_API: use a valid http(s) base URL") from exc
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not hostname
-        or port == 0
-        or "@" in parsed.netloc
-        or parsed.query
-        or parsed.fragment
-    ):
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(hostname)
+        and port != 0
+        and "@" not in parsed.netloc
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def validate_api_url() -> None:
+    if not _is_valid_base_url(API):
         raise TeamAIRequestError("Invalid TEAMAI_API: use an http(s) base URL without credentials, query, or fragment")
     if any(ord(char) < 33 or ord(char) > 126 for char in API_KEY):
         raise TeamAIRequestError("Invalid TEAMAI_API_KEY: use visible ASCII characters without spaces")
+
+
+def hub_base_url() -> str | None:
+    """Return the Issue Hub Web base URL for human-facing view links.
+
+    Prefer TEAMAI_WEB_URL when set; otherwise reuse TEAMAI_API. Returns None if
+    the chosen value is not a valid base URL so callers can skip hints safely.
+    """
+    web = os.getenv("TEAMAI_WEB_URL", "").strip().rstrip("/")
+    candidate = web or API
+    if not _is_valid_base_url(candidate):
+        return None
+    return candidate
+
+
+def record_view_url(record_id: int | str) -> str | None:
+    """Deep link to open a record in the Issue Hub Web UI (#record=<id>)."""
+    base = hub_base_url()
+    if base is None:
+        return None
+    try:
+        rid = int(record_id)
+    except (TypeError, ValueError):
+        return None
+    if rid < 1:
+        return None
+    return f"{base}/#record={rid}"
 
 
 def request(method: str, path: str, payload: dict | None = None, username: str | None = None):
